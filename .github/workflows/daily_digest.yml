@@ -2,7 +2,7 @@ name: Daily Portfolio Digest
 
 on:
   schedule:
-    - cron: '0 12 * * 1-5'  # 7am ET (12:00 UTC), weekdays only
+    - cron: '0 10 * * 1-5'  # 5am ET (10:00 UTC)  # 7am ET (12:00 UTC), weekdays only
   workflow_dispatch:          # allows manual trigger from GitHub UI
 
 jobs:
