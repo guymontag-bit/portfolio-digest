@@ -8,7 +8,7 @@ from anthropic import Anthropic
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-SHEET_NAME = "Investing Dashboard"
+SPREADSHEET_ID = "14M4QR3kLWd40T-N-iIPgw-utWgbfTluWbhP5-O4_n9A"
 TICKER_COLUMN = "B"
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
 SENDER_EMAIL = os.environ["SENDER_EMAIL"]
@@ -29,20 +29,8 @@ def get_tickers_from_sheet():
     )
     service = build("sheets", "v4", credentials=creds)
 
-    # Find the spreadsheet by name
-    drive_service = build("drive", "v3", credentials=creds)
-    results = drive_service.files().list(
-        q=f"name='{SHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet'",
-        fields="files(id, name)"
-    ).execute()
-    files = results.get("files", [])
-    if not files:
-        raise ValueError(f"Could not find a sheet named '{SHEET_NAME}'")
-    spreadsheet_id = files[0]["id"]
-
-    # Read column B, skip header row
     result = service.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
+        spreadsheetId=SPREADSHEET_ID,
         range="B2:B200"
     ).execute()
     values = result.get("values", [])
