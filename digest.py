@@ -9,6 +9,7 @@ from anthropic import Anthropic
 # ── Configuration ────────────────────────────────────────────────────────────
 
 SPREADSHEET_ID = "14M4QR3kLWd40T-N-iIPgw-utWgbfTluWbhP5-O4_n9A"
+SHEET_TAB = "Investing Dashboard"
 TICKER_COLUMN = "B"
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
 SENDER_EMAIL = os.environ["SENDER_EMAIL"]
@@ -31,7 +32,7 @@ def get_tickers_from_sheet():
 
     result = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
-        range="B2:B200"
+        range=f"{SHEET_TAB}!B2:B200"
     ).execute()
     values = result.get("values", [])
     tickers = [row[0].strip().upper() for row in values if row and row[0].strip()]
