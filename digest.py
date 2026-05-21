@@ -8,7 +8,7 @@ from anthropic import Anthropic
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-SPREADSHEET_ID = "14M4QR3kLWd40T-N-iIPgw-utWgbfTluWbhP5-O4_n9A"
+SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
 SHEET_TAB = "Investing Dashboard"
 TICKER_COLUMN = "B"
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
