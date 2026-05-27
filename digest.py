@@ -143,28 +143,31 @@ def generate_summary(portfolio):
 
     today_str = datetime.utcnow().strftime("%A, %B %d, %Y")
 
-    prompt = f"""You are a sharp, experienced financial analyst preparing a pre-market morning briefing for a portfolio investor.
+    prompt = f"""You are a trading assistant helping a retail investor manage a small hobby portfolio of micro-cap and speculative stocks. The investor's strategy is short holding periods with small positions, looking to exit as quickly as possible when negative signals appear.
 
 Today is {today_str}. Below is the portfolio data including yesterday's price action and recent news for each holding.
 
 {data_block}
 
-Write a detailed daily portfolio digest with the following structure:
+Write a focused daily portfolio briefing structured as follows:
 
-1. MARKET OVERVIEW — A 2-3 sentence big-picture summary of what's happening across the portfolio today.
+1. EXIT FLAGS — This is the most important section. Lead with any holding that triggers one or more of the following:
+   - Declined more than 7% in the prior session
+   - Showing low volume or thin liquidity (flag if volume is unusually low)
+   - Analyst downgrade or price target cut
+   - Negative company-specific news: FDA rejection, clinical trial failure, earnings miss, insider selling, SEC filing concerns, or any other material negative catalyst
+   For each flagged holding, state clearly: what the signal is, why it matters, and whether it suggests an exit should be considered.
 
-2. HOLDING-BY-HOLDING BREAKDOWN — For each ticker:
-   - Price action summary (what moved and by how much)
-   - What the news means for this specific holding
-   - Any risks, opportunities, or items to watch
-   - A one-line "bottom line" assessment
+2. HOLDING-BY-HOLDING BREAKDOWN — For each position not already flagged for exit:
+   - Price action and volume summary
+   - Any company-specific news and what it means for this holding specifically
+   - One-line bottom line: hold, watch, or investigate further
 
-3. CROSS-PORTFOLIO FLAGS — Note any themes, risks, or macro events that affect multiple holdings simultaneously (e.g. sector moves, interest rate news, geopolitical events).
+3. POSITIVE CATALYSTS — Briefly note any holdings with meaningful positive news (analyst upgrades, FDA approvals, strong earnings, significant partnerships). Keep this section concise.
 
-4. THINGS TO WATCH TODAY — 3-5 bullet points of specific items to monitor during today's trading session.
+4. THINGS TO WATCH TODAY — 3-5 specific items relevant to holdings in this portfolio for today's session.
 
-Be direct, specific, and analytical. Avoid generic filler. If there is no meaningful news for a holding, say so briefly and move on. Use plain text formatting suitable for email."""
-
+Be direct and actionable. Skip generic market commentary. If there is no news for a holding say so in one line and move on. Focus on company-specific developments over macro themes. The investor wants to know: should I exit anything today, and is there anything I need to act on?"""
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=2000,
