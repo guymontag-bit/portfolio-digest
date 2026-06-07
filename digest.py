@@ -10,18 +10,20 @@ from anthropic import Anthropic
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-SPREADSHEET_ID        = os.environ["SPREADSHEET_ID"]
-PORTFOLIO_TAB         = "Current Positions"
-PORTFOLIO_RANGE       = "B2:B200"
-WATCHLIST_TAB         = "Watchlist"
-WATCHLIST_RANGE       = "A2:A200"
+SPREADSHEET_ID          = os.environ["SPREADSHEET_ID"]
+PORTFOLIO_TAB           = "Current Positions"
+PORTFOLIO_RANGE         = "B2:B200"
+ACTIVE_WATCHLIST_TAB    = "1 Active Watchlist"
+MONITORING_WATCHLIST_TAB= "2 Monitoring Watchlist"
+REASSESS_WATCHLIST_TAB  = "3 Reassess Watchlist"
+WATCHLIST_RANGE         = "A2:A200"
 
-RECIPIENT_EMAIL       = os.environ["RECIPIENT_EMAIL"]
-SENDER_EMAIL          = os.environ["SENDER_EMAIL"]
-ANTHROPIC_API_KEY     = os.environ["ANTHROPIC_API_KEY"]
-SENDGRID_API_KEY      = os.environ["SENDGRID_API_KEY"]
-FINNHUB_API_KEY       = os.environ["FINNHUB_API_KEY"]
-POLYGON_API_KEY       = os.environ["POLYGON_API_KEY"]
+RECIPIENT_EMAIL         = os.environ["RECIPIENT_EMAIL"]
+SENDER_EMAIL            = os.environ["SENDER_EMAIL"]
+ANTHROPIC_API_KEY       = os.environ["ANTHROPIC_API_KEY"]
+SENDGRID_API_KEY        = os.environ["SENDGRID_API_KEY"]
+FINNHUB_API_KEY         = os.environ["FINNHUB_API_KEY"]
+POLYGON_API_KEY         = os.environ["POLYGON_API_KEY"]
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 
@@ -35,14 +37,13 @@ def _sheet_service():
     return build("sheets", "v4", credentials=creds)
 
 def _read_tickers(tab, cell_range):
-    """Generic helper: read a column of tickers from a named tab."""
+    """Generic helper: read a deduplicated column of tickers from a named tab."""
     service = _sheet_service()
     result = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{tab}!{cell_range}"
     ).execute()
     values = result.get("values", [])
-    # Deduplicate while preserving order
     seen = set()
     tickers = []
     for row in values:
@@ -59,10 +60,22 @@ def get_tickers_from_sheet():
     print(f"Found {len(tickers)} portfolio tickers: {', '.join(tickers)}")
     return tickers
 
-def get_watchlist_from_sheet():
-    """Read unique watchlist tickers from Watchlist tab, column A."""
-    tickers = _read_tickers(WATCHLIST_TAB, WATCHLIST_RANGE)
-    print(f"Found {len(tickers)} watchlist tickers: {', '.join(tickers)}")
+def get_active_watchlist_from_sheet():
+    """Read unique tickers from 1 Active Watchlist tab, column A."""
+    tickers = _read_tickers(ACTIVE_WATCHLIST_TAB, WATCHLIST_RANGE)
+    print(f"Found {len(tickers)} active watchlist tickers: {', '.join(tickers)}")
+    return tickers
+
+def get_monitoring_watchlist_from_sheet():
+    """Read unique tickers from 2 Monitoring Watchlist tab, column A."""
+    tickers = _read_tickers(MONITORING_WATCHLIST_TAB, WATCHLIST_RANGE)
+    print(f"Found {len(tickers)} monitoring watchlist tickers: {', '.join(tickers)}")
+    return tickers
+
+def get_reassess_watchlist_from_sheet():
+    """Read unique tickers from 3 Reassess Watchlist tab, column A."""
+    tickers = _read_tickers(REASSESS_WATCHLIST_TAB, WATCHLIST_RANGE)
+    print(f"Found {len(tickers)} reassess watchlist tickers: {', '.join(tickers)}")
     return tickers
 
 # ── Market Data (Massive / Polygon) ──────────────────────────────────────────
@@ -122,8 +135,8 @@ def get_google_news(ticker):
     """Fallback: fetch recent headlines from Google News RSS for a ticker."""
     url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en"
     try:
-        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        root  = ET.fromstring(r.content)
+        r    = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        root = ET.fromstring(r.content)
         items = root.findall(".//item")[:5]
         articles = []
         for item in items:
@@ -152,11 +165,6 @@ def get_news(ticker):
 def get_edgar_filings(ticker):
     """Fetch recent 8-K filings from SEC EDGAR for a ticker (past 48 hours)."""
     try:
-        # Step 1: resolve ticker to CIK
-        search_url = f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22&dateRange=custom&startdt={(datetime.utcnow()-timedelta(days=2)).strftime('%Y-%m-%d')}&enddt={datetime.utcnow().strftime('%Y-%m-%d')}&forms=8-K"
-        headers    = {"User-Agent": "portfolio-digest contact@example.com"}
-
-        # Use the EDGAR full-text search for 8-Ks mentioning this ticker
         search_url = (
             f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22"
             f"&forms=8-K"
@@ -164,24 +172,23 @@ def get_edgar_filings(ticker):
             f"&startdt={(datetime.utcnow()-timedelta(days=2)).strftime('%Y-%m-%d')}"
             f"&enddt={datetime.utcnow().strftime('%Y-%m-%d')}"
         )
+        headers = {"User-Agent": "portfolio-digest contact@example.com"}
         r    = requests.get(search_url, headers=headers, timeout=10)
         data = r.json()
         hits = data.get("hits", {}).get("hits", [])
 
         filings = []
         for hit in hits[:3]:
-            src        = hit.get("_source", {})
-            filed_at   = src.get("file_date", "")
-            form_type  = src.get("form_type", "8-K")
-            entity     = src.get("entity_name", ticker)
-            description= src.get("period_of_report", "")
-            filing_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company={ticker}&type=8-K&dateb=&owner=include&count=5"
+            src         = hit.get("_source", {})
+            filed_at    = src.get("file_date", "")
+            form_type   = src.get("form_type", "8-K")
+            entity      = src.get("entity_name", ticker)
+            description = src.get("period_of_report", "")
             filings.append({
                 "form":        form_type,
                 "entity":      entity,
                 "filed":       filed_at,
                 "description": description,
-                "url":         filing_url
             })
         return filings
     except Exception as e:
@@ -195,15 +202,15 @@ def build_portfolio_data(tickers):
     portfolio = []
     for ticker in tickers:
         print(f"Fetching data for {ticker}...")
-        quote    = get_quote(ticker)
-        news     = get_news(ticker)
-        filings  = get_edgar_filings(ticker)
+        quote   = get_quote(ticker)
+        news    = get_news(ticker)
+        filings = get_edgar_filings(ticker)
         time.sleep(0.25)  # gentle rate limiting
         portfolio.append({
-            "ticker":   ticker,
-            "quote":    quote,
-            "news":     news,
-            "filings":  filings
+            "ticker":  ticker,
+            "quote":   quote,
+            "news":    news,
+            "filings": filings
         })
     return portfolio
 
@@ -213,10 +220,10 @@ def build_data_block(portfolio):
     """Build a readable text block from portfolio data for Claude prompts."""
     data_block = ""
     for holding in portfolio:
-        ticker   = holding["ticker"]
-        quote    = holding["quote"]
-        news     = holding["news"]
-        filings  = holding.get("filings", [])
+        ticker  = holding["ticker"]
+        quote   = holding["quote"]
+        news    = holding["news"]
+        filings = holding.get("filings", [])
 
         data_block += f"\n## {ticker}\n"
 
@@ -295,21 +302,21 @@ Be direct and actionable. Skip generic market commentary. If there is no news or
     )
     return message.content[0].text
 
-# ── Claude Summary (Watchlist) ────────────────────────────────────────────────
+# ── Claude Summary (Active Watchlist) ────────────────────────────────────────
 
-def generate_watchlist_summary(portfolio):
-    """Generate entry-focused watchlist digest via Claude."""
+def generate_active_watchlist_summary(portfolio):
+    """Generate entry-focused digest for Tier 1 active watchlist via Claude."""
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
     data_block = build_data_block(portfolio)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
 
-    prompt = f"""You are a trading assistant helping a retail investor monitor a watchlist of speculative micro-cap stocks for potential entry opportunities. The investor takes small positions and looks for short-term catalysts.
+    prompt = f"""You are a trading assistant helping a retail investor monitor their active watchlist of speculative micro-cap stocks. These are the investor's highest-conviction watchlist names — tickers they are actively considering entering in the near term. The investor takes small positions and looks for short-term catalysts.
 
-Today is {today_str}. Below is watchlist data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
+Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
 
 {data_block}
 
-Write a focused watchlist briefing structured as follows:
+Write a focused active watchlist briefing structured as follows:
 
 1. ENTRY OPPORTUNITIES — Lead with any ticker showing a compelling near-term entry signal:
    - Positive catalyst: FDA approval or positive ruling, strong earnings, analyst upgrade or new coverage, significant partnership or licensing deal
@@ -321,14 +328,97 @@ Write a focused watchlist briefing structured as follows:
 2. TICKER-BY-TICKER BREAKDOWN — For each ticker not flagged as an entry opportunity:
    - Price action and volume summary
    - Any company-specific news or EDGAR filings and what they mean
-   - One-line bottom line: watching, not yet, or avoid
+   - One-line bottom line: enter, wait for better price, or avoid today
 
-3. RISK FLAGS — Note any watchlist tickers showing warning signs that should be removed from consideration:
+3. RISK FLAGS — Note any tickers showing warning signs that should be reconsidered or dropped:
    - Negative catalysts, FDA rejections, adverse 8-K filings, insider selling, deteriorating fundamentals
 
-4. THINGS TO WATCH TODAY — 3-5 specific upcoming catalysts or events relevant to watchlist tickers.
+4. THINGS TO WATCH TODAY — 3-5 specific upcoming catalysts or events relevant to these tickers.
 
-Be direct and actionable. Focus entirely on company-specific developments. The investor wants to know: is anything on my watchlist worth entering today?"""
+Be direct and actionable. Focus entirely on company-specific developments. The investor wants to know: is anything on this list worth entering today?"""
+
+    message = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return message.content[0].text
+
+# ── Claude Summary (Monitoring Watchlist) ────────────────────────────────────
+
+def generate_monitoring_watchlist_summary(portfolio):
+    """Generate signal-watching digest for Tier 2 monitoring watchlist via Claude."""
+    client     = Anthropic(api_key=ANTHROPIC_API_KEY)
+    data_block = build_data_block(portfolio)
+    today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
+
+    prompt = f"""You are a trading assistant helping a retail investor monitor their secondary watchlist of speculative micro-cap stocks. These tickers are being watched for developing signals — they are not yet ready for entry but could be elevated to the active watchlist if the right catalyst appears.
+
+Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
+
+{data_block}
+
+Write a focused monitoring watchlist briefing structured as follows:
+
+1. ELEVATE TO ACTIVE — Flag any ticker that now shows a signal strong enough to warrant moving to the active watchlist for near-term entry consideration:
+   - A clear near-term catalyst has emerged (FDA decision, trial readout, earnings, analyst initiation)
+   - A positive 8-K filing with material implications
+   - Unusual volume or price action suggesting something is developing
+   For each flagged ticker, explain what changed and why it warrants closer attention.
+
+2. TICKER-BY-TICKER BREAKDOWN — For each ticker not flagged for elevation:
+   - Price action and volume summary
+   - Any news or EDGAR filings and what they suggest about timing
+   - One-line bottom line: developing, no change, or losing conviction
+
+3. REMOVE FROM LIST — Note any tickers that have deteriorated to the point of no longer being worth monitoring:
+   - Adverse events, failed trials, negative 8-K filings, or no meaningful catalyst on the horizon
+
+4. THINGS TO WATCH — 3-5 upcoming events or filings that could change the status of tickers on this list.
+
+Be concise and signal-focused. The investor wants to know: has anything here earned a promotion to the active watchlist?"""
+
+    message = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return message.content[0].text
+
+# ── Claude Summary (Reassess Watchlist) ──────────────────────────────────────
+
+def generate_reassess_watchlist_summary(portfolio):
+    """Generate keep-or-cut digest for Tier 3 reassess watchlist via Claude."""
+    client     = Anthropic(api_key=ANTHROPIC_API_KEY)
+    data_block = build_data_block(portfolio)
+    today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
+
+    prompt = f"""You are a trading assistant helping a retail investor review their reassess watchlist — a list of speculative micro-cap stocks that have been flagged for reconsideration. These tickers have either underperformed expectations, lost a catalyst, or simply haven't moved. The investor needs to decide whether to keep watching, move them up, or drop them entirely.
+
+Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
+
+{data_block}
+
+Write a focused reassess watchlist briefing structured as follows:
+
+1. DROP — Lead with any ticker that should be removed from all watchlists entirely:
+   - No remaining near-term catalyst
+   - Adverse news, failed trial, FDA rejection, or negative 8-K
+   - Prolonged low volume with no signs of life
+   For each, give a one-line rationale for dropping it.
+
+2. KEEP WATCHING — Tickers that still have a reason to remain on the reassess list:
+   - A pending catalyst that hasn't resolved yet
+   - Price action or volume suggesting something may still develop
+   For each, state what would need to happen to elevate it or drop it.
+
+3. ELEVATE — Flag any ticker that has unexpectedly shown a positive signal worth promoting to the monitoring or active watchlist:
+   - Surprise positive catalyst, strong 8-K, or analyst attention
+   For each, explain what changed.
+
+4. SUMMARY — A brief 2-3 sentence overall assessment of this tier: is the list getting cleaner or are there still names worth holding onto?
+
+Be direct and unsentimental. The purpose of this list is to cut underperformers and recycle attention toward better opportunities."""
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -373,9 +463,17 @@ def send_email(summary):
     today_str = datetime.utcnow().strftime("%B %d, %Y")
     _send_sendgrid_email(f"Portfolio Digest — {today_str}", summary)
 
-def send_watchlist_email(summary):
+def send_active_watchlist_email(summary):
     today_str = datetime.utcnow().strftime("%B %d, %Y")
-    _send_sendgrid_email(f"Watchlist Digest — {today_str}", summary)
+    _send_sendgrid_email(f"Active Watchlist Digest — {today_str}", summary)
+
+def send_monitoring_watchlist_email(summary):
+    today_str = datetime.utcnow().strftime("%B %d, %Y")
+    _send_sendgrid_email(f"Monitoring Watchlist Digest — {today_str}", summary)
+
+def send_reassess_watchlist_email(summary):
+    today_str = datetime.utcnow().strftime("%B %d, %Y")
+    _send_sendgrid_email(f"Reassess Watchlist Digest — {today_str}", summary)
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -393,16 +491,38 @@ def main():
     else:
         print("No portfolio tickers found, skipping.")
 
-    # Watchlist
-    watchlist_tickers = get_watchlist_from_sheet()
-    if watchlist_tickers:
-        watchlist_portfolio = build_portfolio_data(watchlist_tickers)
-        print("Generating watchlist summary with Claude...")
-        watchlist_summary = generate_watchlist_summary(watchlist_portfolio)
-        print("Sending watchlist email...")
-        send_watchlist_email(watchlist_summary)
+    # Tier 1 — Active Watchlist
+    active_tickers = get_active_watchlist_from_sheet()
+    if active_tickers:
+        active_portfolio = build_portfolio_data(active_tickers)
+        print("Generating active watchlist summary with Claude...")
+        active_summary = generate_active_watchlist_summary(active_portfolio)
+        print("Sending active watchlist email...")
+        send_active_watchlist_email(active_summary)
     else:
-        print("No watchlist tickers found, skipping.")
+        print("No active watchlist tickers found, skipping.")
+
+    # Tier 2 — Monitoring Watchlist
+    monitoring_tickers = get_monitoring_watchlist_from_sheet()
+    if monitoring_tickers:
+        monitoring_portfolio = build_portfolio_data(monitoring_tickers)
+        print("Generating monitoring watchlist summary with Claude...")
+        monitoring_summary = generate_monitoring_watchlist_summary(monitoring_portfolio)
+        print("Sending monitoring watchlist email...")
+        send_monitoring_watchlist_email(monitoring_summary)
+    else:
+        print("No monitoring watchlist tickers found, skipping.")
+
+    # Tier 3 — Reassess Watchlist
+    reassess_tickers = get_reassess_watchlist_from_sheet()
+    if reassess_tickers:
+        reassess_portfolio = build_portfolio_data(reassess_tickers)
+        print("Generating reassess watchlist summary with Claude...")
+        reassess_summary = generate_reassess_watchlist_summary(reassess_portfolio)
+        print("Sending reassess watchlist email...")
+        send_reassess_watchlist_email(reassess_summary)
+    else:
+        print("No reassess watchlist tickers found, skipping.")
 
     print("Done.")
 
