@@ -316,8 +316,8 @@ def send_summary_email(new_events, changed_events, tickers_processed, tickers_wi
 <p><em>All events written directly to the Upcoming Events tab in your Investing Dashboard.</em></p>"""
 
     message = Mail(
-        from_email=SENDER_EMAIL,
-        to_emails=RECIPIENT_EMAIL,
+        from_email=FROM_EMAIL,
+        to_emails=TO_EMAIL,
         subject=f"Catalyst Calendar Update — {datetime.utcnow().strftime('%b %d, %Y')}",
         html_content=body
     )
@@ -356,6 +356,11 @@ def main():
             continue
 
         print(f"  Found {len(snippets)} filing(s), extracting events...")
+        print(f"  --- DEBUG: Snippet content for {ticker} ---")
+        for i, s in enumerate(snippets):
+            print(f"  Filing {i+1} (accession: {s['accession']}, filed: {s['filing_date']}):")
+            print(f"    {s['snippet']}")
+        print(f"  --- END DEBUG for {ticker} ---")
         extracted = extract_events_with_claude(ticker, snippets)
 
         if extracted:
