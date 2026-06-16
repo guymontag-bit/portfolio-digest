@@ -14,8 +14,8 @@ from sendgrid.helpers.mail import Mail
 SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SENDGRID_API_KEY = os.environ["SENDGRID_API_KEY"]
-FROM_EMAIL = os.environ["FROM_EMAIL"]
-TO_EMAIL = os.environ["TO_EMAIL"]
+FROM_EMAIL = os.environ["SENDER_EMAIL"]
+TO_EMAIL = os.environ["RECIPIENT_EMAIL"]
 
 EDGAR_HEADERS = {
     "User-Agent": "Benjamin Sweeney thetaindigo.bs@gmail.com",
@@ -38,7 +38,7 @@ LOOKBACK_DAYS = 8  # cover full week plus buffer
 # ── Google Sheets helpers ─────────────────────────────────────────────────────
 
 def get_sheets_service():
-    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
+    creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = service_account.Credentials.from_service_account_info(
         creds_json,
         scopes=["https://www.googleapis.com/auth/spreadsheets"]
