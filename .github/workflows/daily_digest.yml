@@ -34,7 +34,7 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: python digest.py
