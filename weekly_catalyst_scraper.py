@@ -5,7 +5,7 @@ import requests
 from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import anthropic
+from anthropic import Anthropic
 import sendgrid
 from sendgrid.helpers.mail import Mail
 
@@ -16,14 +16,7 @@ ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SENDGRID_API_KEY = os.environ["SENDGRID_API_KEY"]
 SENDER_EMAIL = os.environ["SENDER_EMAIL"]
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
-
-EDGAR_HEADERS = {
-    "User-Agent": "Benjamin Sweeney thetaindigo.bs@gmail.com",
-    "Accept-Encoding": "gzip, deflate",
-}
-
-EDGAR_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
-EDGAR_TERMS = ["PDUFA", "target action date", "topline data", "advisory committee", "Phase 3 results"]
+FINNHUB_API_KEY = os.environ["FINNHUB_API_KEY"]
 
 SOURCE_SHEET = "Investing Dashboard"
 SOURCE_RANGE = f"{SOURCE_SHEET}!B:J"  # B = ticker, J = status
@@ -31,9 +24,9 @@ SOURCE_RANGE = f"{SOURCE_SHEET}!B:J"  # B = ticker, J = status
 ACTIVE_STATUSES = ["Active", "Active - Watch", "Monitoring - Watch"]
 
 EVENTS_SHEET = "Upcoming Events"
-EVENTS_HEADERS = ["Ticker", "Event Type", "Event Date", "Notes", "Source Filing", "Date Added"]
+EVENTS_HEADERS = ["Ticker", "Event Type", "Event Date", "Notes", "Source", "Date Added"]
 
-LOOKBACK_DAYS = 8  # cover full week plus buffer
+LOOKBACK_DAYS = 15  # generous overlap between weekly runs to reduce coverage gaps
 
 # ── Google Sheets helpers ─────────────────────────────────────────────────────
 
@@ -109,106 +102,121 @@ def update_event_date(service, existing_rows, row_index, new_date):
     ).execute()
 
 
-# ── EDGAR search ─────────────────────────────────────────────────────────────
+# ── News sources (Finnhub primary, Google News RSS fallback) ─────────────────
 
-def edgar_search(ticker, term, lookback_days=LOOKBACK_DAYS, max_retries=3):
-    """Search EDGAR full-text for a ticker + term in recent 8-K filings."""
-    since_date = (datetime.utcnow() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+def get_finnhub_news(ticker, lookback_days=LOOKBACK_DAYS):
+    """Fetch recent news for a ticker from Finnhub, scoped to the lookback window."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    since = (datetime.utcnow() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    url = "https://finnhub.io/api/v1/company-news"
     params = {
-        "q": f'"{term}"',
-        "forms": "8-K",
-        "ticker": ticker,
-        "dateRange": "custom",
-        "startdt": since_date,
+        "symbol": ticker,
+        "from": since,
+        "to": today,
+        "token": FINNHUB_API_KEY
     }
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(
-                EDGAR_SEARCH_URL,
-                params=params,
-                headers=EDGAR_HEADERS,
-                timeout=10
-            )
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code in [429, 503]:
-                wait = 2 ** attempt
-                print(f"  Rate limited on {ticker} / '{term}', waiting {wait}s...")
-                time.sleep(wait)
-            else:
-                print(f"  EDGAR error {response.status_code} for {ticker} / '{term}'")
-                return None
-        except Exception as e:
-            print(f"  EDGAR exception for {ticker} / '{term}': {e}")
-            time.sleep(2 ** attempt)
-    return None
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        articles = r.json()
+        if not isinstance(articles, list):
+            return []
+        return [
+            {
+                "headline": a.get("headline", ""),
+                "summary": a.get("summary", ""),
+                "source": a.get("source", "Finnhub"),
+                "url": a.get("url", ""),
+                "datetime": a.get("datetime", "")
+            }
+            for a in articles[:10]
+            if a.get("headline")
+        ]
+    except Exception as e:
+        print(f"  Warning: Finnhub news fetch failed for {ticker}: {e}")
+        return []
 
 
-def collect_snippets(ticker):
-    """Run all search terms for a ticker and collect unique filing snippets."""
-    snippets = {}
-    for term in EDGAR_TERMS:
-        result = edgar_search(ticker, term)
-        if result and result.get("hits", {}).get("hits"):
-            for hit in result["hits"]["hits"]:
-                accession = hit.get("_id", "")
-                if accession not in snippets:
-                    entity = hit.get("_source", {})
-                    snippet = entity.get("file_date", "") + " | " + entity.get("period_of_report", "") + " | " + str(entity.get("entity_name", ""))
-                    # include any text excerpt if available
-                    highlight = hit.get("highlight", {})
-                    for key, val in highlight.items():
-                        if val:
-                            snippet += " | " + " ".join(val)
-                    snippets[accession] = {
-                        "accession": accession,
-                        "snippet": snippet,
-                        "filing_date": entity.get("file_date", "")
-                    }
-        time.sleep(1)  # polite crawl between term searches
-    return list(snippets.values())
+def get_google_news(ticker):
+    """Fallback: fetch recent headlines from Google News RSS for a ticker."""
+    import xml.etree.ElementTree as ET
+    url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en"
+    try:
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        root = ET.fromstring(r.content)
+        items = root.findall(".//item")[:10]
+        articles = []
+        for item in items:
+            headline = item.findtext("title", "").strip()
+            link = item.findtext("link", "").strip()
+            pub_date = item.findtext("pubDate", "").strip()
+            if headline:
+                articles.append({
+                    "headline": headline,
+                    "summary": "",
+                    "source": "Google News",
+                    "url": link,
+                    "datetime": pub_date
+                })
+        return articles
+    except Exception as e:
+        print(f"  Warning: Google News fetch failed for {ticker}: {e}")
+        return []
+
+
+def get_news_for_ticker(ticker):
+    """Return Finnhub news; fall back to Google News RSS if Finnhub returns nothing."""
+    articles = get_finnhub_news(ticker)
+    if not articles:
+        print(f"  No Finnhub news for {ticker}, trying Google News RSS...")
+        articles = get_google_news(ticker)
+    return articles
 
 
 # ── Claude extraction ─────────────────────────────────────────────────────────
 
-def extract_events_with_claude(ticker, snippets):
-    """Pass filing snippets to Claude and extract structured future catalyst events."""
-    if not snippets:
+def extract_events_with_claude(ticker, articles):
+    """Pass news articles to Claude and extract structured future catalyst events."""
+    if not articles:
         return []
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
     combined = "\n\n".join([
-        f"Filing {i+1} (accession: {s['accession']}, filed: {s['filing_date']}):\n{s['snippet']}"
-        for i, s in enumerate(snippets)
+        f"Article {i+1} (source: {a['source']}, published: {a.get('datetime', 'unknown')}):\n"
+        f"Headline: {a['headline']}\n"
+        f"Summary: {a.get('summary', '(none)')}"
+        for i, a in enumerate(articles)
     ])
 
-    prompt = f"""You are analyzing SEC 8-K filing excerpts for the stock ticker {ticker}.
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
-Your task is to extract any FUTURE binary catalyst events mentioned in these filings.
+    prompt = f"""You are analyzing recent news articles about the stock ticker {ticker}.
+
+Your task is to extract any FUTURE binary catalyst events mentioned in these articles.
 
 ONLY extract events that:
-- Have a specific date or date range in the future (after today {datetime.utcnow().strftime('%Y-%m-%d')})
-- Are binary catalysts: PDUFA dates, FDA advisory committee meetings, Phase 2/3 topline data readouts, NDA/BLA submissions, or similar regulatory milestones
+- Have a specific date, date range, or quarter mentioned that is in the future (after today {today_str})
+- Are binary catalysts: PDUFA dates, FDA advisory committee meetings, Phase 2/3 topline data readouts, NDA/BLA submissions or decisions, earnings with material guidance, or similar regulatory/clinical milestones
 - Are clearly associated with ticker {ticker}
 
 Do NOT extract:
-- Past events or historical references
-- Vague language without a date ("data expected eventually")
-- Non-catalyst events (earnings, general updates)
+- Past events or historical references (e.g. "following last month's approval...")
+- Vague language without any date or timeframe ("data expected eventually")
+- Routine news with no specific future date attached
+- Speculation or analyst opinion pieces with no company-disclosed date
 
 Respond ONLY with a JSON array. Each element should have these exact keys:
 - "ticker": string (always {ticker})
-- "event_type": string (e.g. "PDUFA", "Phase 3 Readout", "FDA Advisory Committee", "NDA Submission")
-- "event_date": string in YYYY-MM-DD format, or "Q1 2026" style if only quarter is mentioned
+- "event_type": string (e.g. "PDUFA", "Phase 3 Readout", "FDA Advisory Committee", "NDA Submission", "Earnings")
+- "event_date": string in YYYY-MM-DD format if a specific date is given, otherwise "Q1 2026" style if only a quarter/timeframe is mentioned
 - "notes": string (brief description, max 100 chars)
-- "source_filing": string (accession number)
+- "source": string (the news source name, e.g. "Finnhub" or the publication name)
 
 If no qualifying future events are found, respond with an empty array: []
 
 Do not include any text outside the JSON array.
 
-Filing excerpts:
+News articles:
 {combined}"""
 
     try:
@@ -234,7 +242,6 @@ def check_against_existing(extracted_events, existing_rows):
       - new_events: list of rows to append
       - changed_events: list of (row_index, old_date, new_date, ticker, event_type) tuples
     """
-    # existing_rows[0] is headers, data starts at index 1
     data_rows = existing_rows[1:] if len(existing_rows) > 1 else []
 
     new_events = []
@@ -245,7 +252,7 @@ def check_against_existing(extracted_events, existing_rows):
         event_type = event.get("event_type", "")
         event_date = event.get("event_date", "")
         notes = event.get("notes", "")
-        source = event.get("source_filing", "")
+        source = event.get("source", "")
 
         matched = False
         for i, row in enumerate(data_rows):
@@ -256,12 +263,10 @@ def check_against_existing(extracted_events, existing_rows):
             if existing_ticker == ticker and existing_type == event_type:
                 matched = True
                 if existing_date != event_date:
-                    # date has changed — flag as update
                     changed_events.append((i, existing_date, event_date, ticker, event_type))
-                break  # found match, stop searching
+                break
 
         if not matched:
-            # genuinely new event
             new_events.append([
                 ticker,
                 event_type,
@@ -348,20 +353,15 @@ def main():
     # 3. Process each ticker
     for ticker in tickers:
         print(f"Processing {ticker}...")
-        snippets = collect_snippets(ticker)
+        articles = get_news_for_ticker(ticker)
 
-        if not snippets:
-            print(f"  No relevant filings found for {ticker}")
-            time.sleep(1)
+        if not articles:
+            print(f"  No recent news found for {ticker}")
+            time.sleep(0.5)
             continue
 
-        print(f"  Found {len(snippets)} filing(s), extracting events...")
-        print(f"  --- DEBUG: Snippet content for {ticker} ---")
-        for i, s in enumerate(snippets):
-            print(f"  Filing {i+1} (accession: {s['accession']}, filed: {s['filing_date']}):")
-            print(f"    {s['snippet']}")
-        print(f"  --- END DEBUG for {ticker} ---")
-        extracted = extract_events_with_claude(ticker, snippets)
+        print(f"  Found {len(articles)} article(s), extracting events...")
+        extracted = extract_events_with_claude(ticker, articles)
 
         if extracted:
             tickers_with_results.append(ticker)
@@ -372,7 +372,7 @@ def main():
         else:
             print(f"  No qualifying future events extracted for {ticker}")
 
-        time.sleep(2)  # polite delay between tickers
+        time.sleep(0.5)  # light delay between tickers - news APIs are less rate-sensitive than EDGAR
 
     # 4. Write new events to sheet
     if all_new_events:
@@ -381,7 +381,6 @@ def main():
 
     # 5. Update changed dates
     if all_changed_events:
-        # re-fetch existing rows after appending new ones
         updated_existing = get_existing_events(service)
         for (row_index, old_date, new_date, ticker, event_type) in all_changed_events:
             update_event_date(service, updated_existing, row_index, new_date)
