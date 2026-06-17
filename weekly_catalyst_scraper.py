@@ -316,8 +316,8 @@ def send_summary_email(new_events, changed_events, tickers_processed, tickers_wi
 <p><em>All events written directly to the Upcoming Events tab in your Investing Dashboard.</em></p>"""
 
     message = Mail(
-        from_email=FROM_EMAIL,
-        to_emails=TO_EMAIL,
+        from_email=SENDER_EMAIL,
+        to_emails=RECIPIENT_EMAIL,
         subject=f"Catalyst Calendar Update — {datetime.utcnow().strftime('%b %d, %Y')}",
         html_content=body
     )
