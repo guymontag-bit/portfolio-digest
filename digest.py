@@ -24,6 +24,7 @@ ANTHROPIC_API_KEY       = os.environ["ANTHROPIC_API_KEY"]
 SENDGRID_API_KEY        = os.environ["SENDGRID_API_KEY"]
 FINNHUB_API_KEY         = os.environ["FINNHUB_API_KEY"]
 POLYGON_API_KEY         = os.environ["POLYGON_API_KEY"]
+REASSESS_ENABLED        = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 
@@ -514,15 +515,18 @@ def main():
         print("No monitoring watchlist tickers found, skipping.")
 
     # Tier 3 — Reassess Watchlist
+    if REASSESS_ENABLED:
     reassess_tickers = get_reassess_watchlist_from_sheet()
-    if reassess_tickers:
-        reassess_portfolio = build_portfolio_data(reassess_tickers)
-        print("Generating reassess watchlist summary with Claude...")
-        reassess_summary = generate_reassess_watchlist_summary(reassess_portfolio)
-        print("Sending reassess watchlist email...")
-        send_reassess_watchlist_email(reassess_summary)
+        if reassess_tickers:
+            reassess_portfolio = build_portfolio_data(reassess_tickers)
+            print("Generating reassess watchlist summary with Claude...")
+            reassess_summary = generate_reassess_watchlist_summary(reassess_portfolio)
+            print("Sending reassess watchlist email...")
+            send_reassess_watchlist_email(reassess_summary)
+        else:
+            print("No reassess watchlist tickers found, skipping.")
     else:
-        print("No reassess watchlist tickers found, skipping.")
+        print("Reassess watchlist disabled via REASSESS_ENABLED flag, skipping.")
 
     print("Done.")
 
