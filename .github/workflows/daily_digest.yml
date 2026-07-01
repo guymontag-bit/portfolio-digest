@@ -37,6 +37,7 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          REASSESS_ENABLED: ${{ secrets.REASSESS_ENABLED }}
         run: python digest.py
 
   # ── Weekly catalyst scraper (new) ──────────────────────────────────────────
