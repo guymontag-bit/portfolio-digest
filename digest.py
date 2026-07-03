@@ -516,7 +516,7 @@ def main():
 
     # Tier 3 — Reassess Watchlist
     if REASSESS_ENABLED:
-    reassess_tickers = get_reassess_watchlist_from_sheet()
+        reassess_tickers = get_reassess_watchlist_from_sheet()
         if reassess_tickers:
             reassess_portfolio = build_portfolio_data(reassess_tickers)
             print("Generating reassess watchlist summary with Claude...")
