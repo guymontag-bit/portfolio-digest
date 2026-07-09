@@ -386,7 +386,7 @@ Write a focused monitoring watchlist briefing structured as follows:
 Be concise and signal-focused. The investor wants to know: has anything here earned a promotion to the active watchlist?"""
 
     message = client.messages.create(
-        model="claude-sonnett-4-6",
+        model="claude-sonnet-4-6",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -430,7 +430,7 @@ Write a focused reassess watchlist briefing structured as follows:
 Be direct and unsentimental. The purpose of this list is to cut underperformers and recycle attention toward better opportunities."""
 
     message = client.messages.create(
-        model="claude-sonnett-4-6",
+        model="claude-sonnet-4-6",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
