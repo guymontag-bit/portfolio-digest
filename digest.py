@@ -273,6 +273,8 @@ def generate_summary(portfolio):
 
 Today is {today_str}. Below is the portfolio data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each holding.
 
+IMPORTANT: Only reference facts explicitly present in the data below. Do not infer, estimate, or generate any price, percentage, date, or news detail that is not directly stated. If data for a ticker is missing, incomplete, or unclear, say so plainly rather than filling the gap with a plausible-sounding assumption. It is always better to say "insufficient data" than to guess.
+
 {data_block}
 
 Write a focused daily portfolio briefing structured as follows:
@@ -297,8 +299,8 @@ Write a focused daily portfolio briefing structured as follows:
 Be direct and actionable. Skip generic market commentary. If there is no news or filing for a holding say so in one line and move on. Focus on company-specific developments. The investor wants to know: should I exit anything today, and is there anything I need to act on?"""
 
     message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=2000,
+        model="claude-sonnet-4-6",
+        max_tokens=3000,
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text
@@ -314,6 +316,8 @@ def generate_active_watchlist_summary(portfolio):
     prompt = f"""You are a trading assistant helping a retail investor monitor their active watchlist of speculative micro-cap stocks. These are the investor's highest-conviction watchlist names — tickers they are actively considering entering in the near term. The investor takes small positions and looks for short-term catalysts.
 
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
+
+IMPORTANT: Only reference facts explicitly present in the data below. Do not infer, estimate, or generate any price, percentage, date, or news detail that is not directly stated. If data for a ticker is missing, incomplete, or unclear, say so plainly rather than filling the gap with a plausible-sounding assumption. It is always better to say "insufficient data" than to guess.
 
 {data_block}
 
@@ -339,8 +343,8 @@ Write a focused active watchlist briefing structured as follows:
 Be direct and actionable. Focus entirely on company-specific developments. The investor wants to know: is anything on this list worth entering today?"""
 
     message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=2000,
+        model="claude-sonnet-4-6",
+        max_tokens=3000,
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text
@@ -356,6 +360,8 @@ def generate_monitoring_watchlist_summary(portfolio):
     prompt = f"""You are a trading assistant helping a retail investor monitor their secondary watchlist of speculative micro-cap stocks. These tickers are being watched for developing signals — they are not yet ready for entry but could be elevated to the active watchlist if the right catalyst appears.
 
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
+
+IMPORTANT: Only reference facts explicitly present in the data below. Do not infer, estimate, or generate any price, percentage, date, or news detail that is not directly stated. If data for a ticker is missing, incomplete, or unclear, say so plainly rather than filling the gap with a plausible-sounding assumption. It is always better to say "insufficient data" than to guess.
 
 {data_block}
 
@@ -380,7 +386,7 @@ Write a focused monitoring watchlist briefing structured as follows:
 Be concise and signal-focused. The investor wants to know: has anything here earned a promotion to the active watchlist?"""
 
     message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnett-4-6",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
@@ -397,6 +403,8 @@ def generate_reassess_watchlist_summary(portfolio):
     prompt = f"""You are a trading assistant helping a retail investor review their reassess watchlist — a list of speculative micro-cap stocks that have been flagged for reconsideration. These tickers have either underperformed expectations, lost a catalyst, or simply haven't moved. The investor needs to decide whether to keep watching, move them up, or drop them entirely.
 
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
+
+IMPORTANT: Only reference facts explicitly present in the data below. Do not infer, estimate, or generate any price, percentage, date, or news detail that is not directly stated. If data for a ticker is missing, incomplete, or unclear, say so plainly rather than filling the gap with a plausible-sounding assumption. It is always better to say "insufficient data" than to guess.
 
 {data_block}
 
@@ -422,7 +430,7 @@ Write a focused reassess watchlist briefing structured as follows:
 Be direct and unsentimental. The purpose of this list is to cut underperformers and recycle attention toward better opportunities."""
 
     message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnett-4-6",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}]
     )
