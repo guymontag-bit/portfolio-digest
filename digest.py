@@ -21,7 +21,7 @@ WATCHLIST_RANGE         = "A2:A200"
 RECIPIENT_EMAIL         = os.environ["RECIPIENT_EMAIL"]
 SENDER_EMAIL            = os.environ["SENDER_EMAIL"]
 ANTHROPIC_API_KEY       = os.environ["ANTHROPIC_API_KEY"]
-SENDGRID_API_KEY        = os.environ["SENDGRID_API_KEY"]
+RESEND_API_KEY          = os.environ["RESEND_API_KEY"]
 FINNHUB_API_KEY         = os.environ["FINNHUB_API_KEY"]
 POLYGON_API_KEY         = os.environ["POLYGON_API_KEY"]
 REASSESS_ENABLED        = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
@@ -436,53 +436,45 @@ Be direct and unsentimental. The purpose of this list is to cut underperformers 
     )
     return message.content[0].text
 
-# ── Email Delivery (SendGrid) ─────────────────────────────────────────────────
+# ── Email Delivery (Resend) ─────────────────────────────────────────────────
 
-def _send_sendgrid_email(subject, summary):
-    """Send an email via SendGrid."""
+import resend
+
+def _send_resend_email(subject, summary):
+    """Send an email via Resend."""
+    resend.api_key = RESEND_API_KEY
+
     html_body  = "<pre style='font-family: Georgia, serif; font-size: 15px; line-height: 1.6; max-width: 700px;'>"
     html_body += summary.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     html_body += "</pre>"
 
-    payload = {
-        "personalizations": [{"to": [{"email": RECIPIENT_EMAIL}]}],
-        "from":    {"email": SENDER_EMAIL},
-        "subject": subject,
-        "content": [
-            {"type": "text/plain", "value": summary},
-            {"type": "text/html",  "value": html_body}
-        ]
-    }
-    headers = {
-        "Authorization": f"Bearer {SENDGRID_API_KEY}",
-        "Content-Type":  "application/json"
-    }
-    r = requests.post(
-        "https://api.sendgrid.com/v3/mail/send",
-        headers=headers,
-        json=payload,
-        timeout=15
-    )
-    if r.status_code in (200, 202):
+    try:
+        response = resend.Emails.send({
+            "from": "Portfolio Digest <onboarding@resend.dev>",
+            "to": [RECIPIENT_EMAIL],
+            "subject": subject,
+            "html": html_body,
+            "text": summary
+        })
         print(f"Email '{subject}' sent successfully to {RECIPIENT_EMAIL}")
-    else:
-        raise RuntimeError(f"SendGrid error {r.status_code}: {r.text}")
+    except Exception as e:
+        raise RuntimeError(f"Resend error: {e}")
 
 def send_email(summary):
     today_str = datetime.utcnow().strftime("%B %d, %Y")
-    _send_sendgrid_email(f"Portfolio Digest — {today_str}", summary)
+    _send_resend_email(f"Portfolio Digest — {today_str}", summary)
 
 def send_active_watchlist_email(summary):
     today_str = datetime.utcnow().strftime("%B %d, %Y")
-    _send_sendgrid_email(f"Active Watchlist Digest — {today_str}", summary)
+    _send_resend_email(f"Active Watchlist Digest — {today_str}", summary)
 
 def send_monitoring_watchlist_email(summary):
     today_str = datetime.utcnow().strftime("%B %d, %Y")
-    _send_sendgrid_email(f"Monitoring Watchlist Digest — {today_str}", summary)
+    _send_resend_email(f"Monitoring Watchlist Digest — {today_str}", summary)
 
 def send_reassess_watchlist_email(summary):
     today_str = datetime.utcnow().strftime("%B %d, %Y")
-    _send_sendgrid_email(f"Reassess Watchlist Digest — {today_str}", summary)
+    _send_resend_email(f"Reassess Watchlist Digest — {today_str}", summary)
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
