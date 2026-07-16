@@ -319,7 +319,7 @@ def send_summary_email(new_events, changed_events, tickers_processed, tickers_wi
 {changed_section}
 <p><em>All events written directly to the Upcoming Events tab in your Investing Dashboard.</em></p>"""
 
-   resend.api_key = RESEND_API_KEY
+    resend.api_key = RESEND_API_KEY
     try:
         resend.Emails.send({
             "from": "Portfolio Digest <onboarding@resend.dev>",
