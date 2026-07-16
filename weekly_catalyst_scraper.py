@@ -6,14 +6,13 @@ from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from anthropic import Anthropic
-import sendgrid
-from sendgrid.helpers.mail import Mail
+import resend
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
 SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-SENDGRID_API_KEY = os.environ["SENDGRID_API_KEY"]
+RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 SENDER_EMAIL = os.environ["SENDER_EMAIL"]
 RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
 FINNHUB_API_KEY = os.environ["FINNHUB_API_KEY"]
@@ -320,15 +319,17 @@ def send_summary_email(new_events, changed_events, tickers_processed, tickers_wi
 {changed_section}
 <p><em>All events written directly to the Upcoming Events tab in your Investing Dashboard.</em></p>"""
 
-    message = Mail(
-        from_email=SENDER_EMAIL,
-        to_emails=RECIPIENT_EMAIL,
-        subject=f"Catalyst Calendar Update — {datetime.utcnow().strftime('%b %d, %Y')}",
-        html_content=body
-    )
-    sg = sendgrid.SendGridAPIClient(api_key=SENDGRID_API_KEY)
-    sg.send(message)
-    print("Summary email sent.")
+   resend.api_key = RESEND_API_KEY
+    try:
+        resend.Emails.send({
+            "from": "Portfolio Digest <onboarding@resend.dev>",
+            "to": [RECIPIENT_EMAIL],
+            "subject": f"Catalyst Calendar Update — {datetime.utcnow().strftime('%b %d, %Y')}",
+            "html": body
+        })
+        print("Summary email sent.")
+    except Exception as e:
+        raise RuntimeError(f"Resend error: {e}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
