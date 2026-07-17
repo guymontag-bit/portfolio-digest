@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import requests
@@ -7,24 +8,28 @@ from datetime import datetime, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from anthropic import Anthropic
+import resend
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-SPREADSHEET_ID          = os.environ["SPREADSHEET_ID"]
-PORTFOLIO_TAB           = "Current Positions"
-PORTFOLIO_RANGE         = "B2:B200"
-ACTIVE_WATCHLIST_TAB    = "1 Active Watchlist"
-MONITORING_WATCHLIST_TAB= "2 Monitoring Watchlist"
-REASSESS_WATCHLIST_TAB  = "3 Reassess Watchlist"
-WATCHLIST_RANGE         = "A2:A200"
+SPREADSHEET_ID           = os.environ["SPREADSHEET_ID"]
+PORTFOLIO_TAB             = "Current Positions"
+PORTFOLIO_RANGE           = "B2:B200"
+ACTIVE_WATCHLIST_TAB      = "1 Active Watchlist"
+MONITORING_WATCHLIST_TAB  = "2 Monitoring Watchlist"
+REASSESS_WATCHLIST_TAB    = "3 Reassess Watchlist"
+LONG_POSITIONS_TAB        = "Long Positions"
+WATCHLIST_RANGE           = "A2:A200"
 
-RECIPIENT_EMAIL         = os.environ["RECIPIENT_EMAIL"]
-SENDER_EMAIL            = os.environ["SENDER_EMAIL"]
-ANTHROPIC_API_KEY       = os.environ["ANTHROPIC_API_KEY"]
-RESEND_API_KEY          = os.environ["RESEND_API_KEY"]
-FINNHUB_API_KEY         = os.environ["FINNHUB_API_KEY"]
-POLYGON_API_KEY         = os.environ["POLYGON_API_KEY"]
-REASSESS_ENABLED        = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
+REASSESS_ENABLED       = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
+LONG_POSITIONS_ENABLED = os.environ.get("LONG_POSITIONS_ENABLED", "true").lower() == "true"
+
+RECIPIENT_EMAIL   = os.environ["RECIPIENT_EMAIL"]
+SENDER_EMAIL       = os.environ["SENDER_EMAIL"]
+ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
+RESEND_API_KEY     = os.environ["RESEND_API_KEY"]
+FINNHUB_API_KEY    = os.environ["FINNHUB_API_KEY"]
+POLYGON_API_KEY    = os.environ["POLYGON_API_KEY"]
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 
@@ -62,21 +67,24 @@ def get_tickers_from_sheet():
     return tickers
 
 def get_active_watchlist_from_sheet():
-    """Read unique tickers from 1 Active Watchlist tab, column A."""
     tickers = _read_tickers(ACTIVE_WATCHLIST_TAB, WATCHLIST_RANGE)
     print(f"Found {len(tickers)} active watchlist tickers: {', '.join(tickers)}")
     return tickers
 
 def get_monitoring_watchlist_from_sheet():
-    """Read unique tickers from 2 Monitoring Watchlist tab, column A."""
     tickers = _read_tickers(MONITORING_WATCHLIST_TAB, WATCHLIST_RANGE)
     print(f"Found {len(tickers)} monitoring watchlist tickers: {', '.join(tickers)}")
     return tickers
 
 def get_reassess_watchlist_from_sheet():
-    """Read unique tickers from 3 Reassess Watchlist tab, column A."""
     tickers = _read_tickers(REASSESS_WATCHLIST_TAB, WATCHLIST_RANGE)
     print(f"Found {len(tickers)} reassess watchlist tickers: {', '.join(tickers)}")
+    return tickers
+
+def get_long_positions_from_sheet():
+    """Read unique long-position tickers from Long Positions tab, column B."""
+    tickers = _read_tickers(LONG_POSITIONS_TAB, PORTFOLIO_RANGE)
+    print(f"Found {len(tickers)} long position tickers: {', '.join(tickers)}")
     return tickers
 
 # ── Market Data (Massive / Polygon) ──────────────────────────────────────────
@@ -261,6 +269,17 @@ def build_data_block(portfolio):
 
     return data_block
 
+# ── Shared grounding instruction ──────────────────────────────────────────────
+
+GROUNDING_INSTRUCTION = (
+    "IMPORTANT: Only reference facts explicitly present in the data below. "
+    "Do not infer, estimate, or generate any price, percentage, date, or news "
+    "detail that is not directly stated. If data for a ticker is missing, "
+    "incomplete, or unclear, say so plainly rather than filling the gap with "
+    "a plausible-sounding assumption. It is always better to say \"insufficient "
+    "data\" than to guess."
+)
+
 # ── Claude Summary (Portfolio) ────────────────────────────────────────────────
 
 def generate_summary(portfolio):
@@ -273,7 +292,7 @@ def generate_summary(portfolio):
 
 Today is {today_str}. Below is the portfolio data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each holding.
 
-IMPORTANT: Only reference facts explicitly present in the data below. Do not infer, estimate, or generate any price, percentage, date, or news detail that is not directly stated. If data for a ticker is missing, incomplete, or unclear, say so plainly rather than filling the gap with a plausible-sounding assumption. It is always better to say "insufficient data" than to guess.
+{GROUNDING_INSTRUCTION}
 
 {data_block}
 
@@ -308,7 +327,6 @@ Be direct and actionable. Skip generic market commentary. If there is no news or
 # ── Claude Summary (Active Watchlist) ────────────────────────────────────────
 
 def generate_active_watchlist_summary(portfolio):
-    """Generate entry-focused digest for Tier 1 active watchlist via Claude."""
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
     data_block = build_data_block(portfolio)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
@@ -317,7 +335,7 @@ def generate_active_watchlist_summary(portfolio):
 
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
 
-IMPORTANT: Only reference facts explicitly present in the data below. Do not infer, estimate, or generate any price, percentage, date, or news detail that is not directly stated. If data for a ticker is missing, incomplete, or unclear, say so plainly rather than filling the gap with a plausible-sounding assumption. It is always better to say "insufficient data" than to guess.
+{GROUNDING_INSTRUCTION}
 
 {data_block}
 
@@ -352,7 +370,6 @@ Be direct and actionable. Focus entirely on company-specific developments. The i
 # ── Claude Summary (Monitoring Watchlist) ────────────────────────────────────
 
 def generate_monitoring_watchlist_summary(portfolio):
-    """Generate signal-watching digest for Tier 2 monitoring watchlist via Claude."""
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
     data_block = build_data_block(portfolio)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
@@ -361,7 +378,7 @@ def generate_monitoring_watchlist_summary(portfolio):
 
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
 
-IMPORTANT: Only reference facts explicitly present in the data below. Do not infer, estimate, or generate any price, percentage, date, or news detail that is not directly stated. If data for a ticker is missing, incomplete, or unclear, say so plainly rather than filling the gap with a plausible-sounding assumption. It is always better to say "insufficient data" than to guess.
+{GROUNDING_INSTRUCTION}
 
 {data_block}
 
@@ -387,7 +404,7 @@ Be concise and signal-focused. The investor wants to know: has anything here ear
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=2000,
+        max_tokens=3000,
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text
@@ -395,7 +412,6 @@ Be concise and signal-focused. The investor wants to know: has anything here ear
 # ── Claude Summary (Reassess Watchlist) ──────────────────────────────────────
 
 def generate_reassess_watchlist_summary(portfolio):
-    """Generate keep-or-cut digest for Tier 3 reassess watchlist via Claude."""
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
     data_block = build_data_block(portfolio)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
@@ -404,7 +420,7 @@ def generate_reassess_watchlist_summary(portfolio):
 
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
 
-IMPORTANT: Only reference facts explicitly present in the data below. Do not infer, estimate, or generate any price, percentage, date, or news detail that is not directly stated. If data for a ticker is missing, incomplete, or unclear, say so plainly rather than filling the gap with a plausible-sounding assumption. It is always better to say "insufficient data" than to guess.
+{GROUNDING_INSTRUCTION}
 
 {data_block}
 
@@ -431,14 +447,54 @@ Be direct and unsentimental. The purpose of this list is to cut underperformers 
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=2000,
+        max_tokens=3000,
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text
 
-# ── Email Delivery (Resend) ─────────────────────────────────────────────────
+# ── Claude Summary (Long Positions) ──────────────────────────────────────────
 
-import resend
+def generate_long_positions_summary(portfolio):
+    """Generate a thesis-level digest for long-term core holdings via Claude."""
+    client     = Anthropic(api_key=ANTHROPIC_API_KEY)
+    data_block = build_data_block(portfolio)
+    today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
+
+    prompt = f"""You are a trading assistant helping a retail investor manage a small core of long-term positions held for stability alongside a much more active, short-term speculative portfolio. These are NOT short-term trades. The investor's intended holding period for these names is months, potentially many months to years, not days or weeks.
+
+Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each holding.
+
+{GROUNDING_INSTRUCTION}
+
+CRITICAL FRAMING: Evaluate everything through a multi-month time horizon. Daily price movement, single-session volume spikes, and short-term volatility are NOT relevant to this briefing and should not be treated as action signals — mention price action only briefly for context, not as a headline concern. Do not suggest exiting a position due to a single bad day or a temporary dip. Instead, focus on developments that would change the long-term investment thesis:
+- Material shifts in fundamentals (earnings trends, revenue/margin trajectory, guidance changes)
+- Pipeline or product developments with multi-quarter implications
+- Changes in competitive positioning or market share
+- Balance sheet health, dilution risk, or capital structure changes
+- Leadership or strategic direction changes
+- Regulatory developments with long-term implications (not just near-term binary catalysts)
+
+Write a focused long-term holdings briefing structured as follows:
+
+1. THESIS-CHANGING DEVELOPMENTS — Lead with any holding where something has emerged that could meaningfully alter the long-term investment case, positive or negative. For each, explain what changed and why it matters for the multi-month-to-year outlook, not for tomorrow's trading session.
+
+2. HOLDING-BY-HOLDING BREAKDOWN — For each position not already covered above:
+   - Brief price context (one line, de-emphasized)
+   - Any fundamental or strategic news and what it means for the long-term thesis
+   - One-line bottom line: thesis intact, thesis strengthening, or thesis warrants review
+
+3. THINGS TO MONITOR — 3-5 items relevant to the long-term thesis of these holdings that may develop over the coming weeks to months (e.g. upcoming earnings, expected data readouts, sector trends). This is not a daily action list.
+
+Be calm, measured, and long-horizon in tone — this briefing should read differently from a short-term trading digest. If there is nothing thesis-relevant for a holding, say so briefly and move on rather than manufacturing urgency."""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=3000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return message.content[0].text
+
+# ── Email Delivery (Resend) ───────────────────────────────────────────────────
 
 def _send_resend_email(subject, summary):
     """Send an email via Resend."""
@@ -449,7 +505,7 @@ def _send_resend_email(subject, summary):
     html_body += "</pre>"
 
     try:
-        response = resend.Emails.send({
+        resend.Emails.send({
             "from": "Portfolio Digest <onboarding@resend.dev>",
             "to": [RECIPIENT_EMAIL],
             "subject": subject,
@@ -476,9 +532,14 @@ def send_reassess_watchlist_email(summary):
     today_str = datetime.utcnow().strftime("%B %d, %Y")
     _send_resend_email(f"Reassess Watchlist Digest — {today_str}", summary)
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+def send_long_positions_email(summary):
+    today_str = datetime.utcnow().strftime("%B %d, %Y")
+    _send_resend_email(f"Long-Term Holdings Digest — {today_str}", summary)
 
-def main():
+# ── Flow runners ───────────────────────────────────────────────────────────────
+
+def run_daily_digest():
+    """Run the standard weekday flow: portfolio + active + monitoring + reassess."""
     print("Starting portfolio digest...")
 
     # Portfolio
@@ -529,6 +590,34 @@ def main():
         print("Reassess watchlist disabled via REASSESS_ENABLED flag, skipping.")
 
     print("Done.")
+
+def run_long_positions_digest():
+    """Run the Mon/Wed/Fri long-term holdings flow, independent of the daily flow."""
+    print("Starting long positions digest...")
+
+    if not LONG_POSITIONS_ENABLED:
+        print("Long positions digest disabled via LONG_POSITIONS_ENABLED flag, skipping.")
+        return
+
+    long_tickers = get_long_positions_from_sheet()
+    if long_tickers:
+        long_portfolio = build_portfolio_data(long_tickers)
+        print("Generating long positions summary with Claude...")
+        long_summary = generate_long_positions_summary(long_portfolio)
+        print("Sending long positions email...")
+        send_long_positions_email(long_summary)
+    else:
+        print("No long position tickers found, skipping.")
+
+    print("Done.")
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    if "--long-positions-only" in sys.argv:
+        run_long_positions_digest()
+    else:
+        run_daily_digest()
 
 if __name__ == "__main__":
     main()
