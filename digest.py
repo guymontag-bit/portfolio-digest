@@ -13,13 +13,14 @@ import resend
 # ── Configuration ────────────────────────────────────────────────────────────
 
 SPREADSHEET_ID           = os.environ["SPREADSHEET_ID"]
+
 PORTFOLIO_TAB             = "Current Positions"
-PORTFOLIO_RANGE           = "B2:B200"
+PORTFOLIO_RANGE           = "B2:M200"   # ticker in B, price fields F/H/I/J/K/L/M
 ACTIVE_WATCHLIST_TAB      = "1 Active Watchlist"
 MONITORING_WATCHLIST_TAB  = "2 Monitoring Watchlist"
 REASSESS_WATCHLIST_TAB    = "3 Reassess Watchlist"
 LONG_POSITIONS_TAB        = "Long Positions"
-WATCHLIST_RANGE           = "A2:A200"
+WATCHLIST_RANGE           = "A2:H200"   # ticker in A, price fields B/C/D/E/F/G/H
 
 REASSESS_ENABLED       = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
 LONG_POSITIONS_ENABLED = os.environ.get("LONG_POSITIONS_ENABLED", "true").lower() == "true"
@@ -42,55 +43,138 @@ def _sheet_service():
     )
     return build("sheets", "v4", credentials=creds)
 
-def _read_tickers(tab, cell_range):
-    """Generic helper: read a deduplicated column of tickers from a named tab."""
+def _safe_float(value):
+    """Parse a sheet cell into a float, returning None for blank/#N/A/invalid values."""
+    if value is None:
+        return None
+    s = str(value).strip().replace("$", "").replace(",", "")
+    if s == "" or s.upper() in ("#N/A", "N/A", "#ERROR!", "#REF!", "#VALUE!"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+def _read_tickers_with_fallback(tab, cell_range, ticker_col_offset, field_offsets):
+    """
+    Generic helper: read tickers plus optional Google Finance fallback price fields
+    from a named tab. field_offsets maps field name -> column offset (relative to
+    the start of cell_range) for price, open, high, low, volume, change_pct, tradetime.
+
+    Returns a deduplicated list of dicts: {"ticker": str, "fallback": {...} or None}
+    """
     service = _sheet_service()
     result = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{tab}!{cell_range}"
     ).execute()
     values = result.get("values", [])
+
     seen = set()
-    tickers = []
+    rows = []
     for row in values:
-        if row and row[0].strip():
-            t = row[0].strip().upper()
-            if t not in seen:
-                seen.add(t)
-                tickers.append(t)
-    return tickers
+        if len(row) <= ticker_col_offset:
+            continue
+        raw_ticker = row[ticker_col_offset].strip() if row[ticker_col_offset] else ""
+        if not raw_ticker:
+            continue
+        ticker = raw_ticker.upper()
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+
+        def cell(offset):
+            return row[offset] if len(row) > offset else None
+
+        fallback = {
+            "price":      _safe_float(cell(field_offsets["price"])),
+            "open":       _safe_float(cell(field_offsets["open"])),
+            "high":       _safe_float(cell(field_offsets["high"])),
+            "low":        _safe_float(cell(field_offsets["low"])),
+            "volume":     _safe_float(cell(field_offsets["volume"])),
+            "change_pct": _safe_float(cell(field_offsets["change_pct"])),
+            "tradetime":  cell(field_offsets["tradetime"]),
+        }
+        # Only keep fallback if at least the price field is present
+        if fallback["price"] is None:
+            fallback = None
+
+        rows.append({"ticker": ticker, "fallback": fallback})
+
+    return rows
+
+# Column offsets relative to each range's starting column
+PORTFOLIO_FIELD_OFFSETS = {
+    # range starts at B, so offsets are relative to B (B=0)
+    "price":      4,  # F
+    "open":       6,  # H
+    "high":       7,  # I
+    "low":        8,  # J
+    "volume":     9,  # K
+    "change_pct": 10, # L
+    "tradetime":  11, # M
+}
+WATCHLIST_FIELD_OFFSETS = {
+    # range starts at A, so offsets are relative to A (A=0)
+    "price":      1,  # B
+    "open":       2,  # C
+    "high":       3,  # D
+    "low":        4,  # E
+    "volume":     5,  # F
+    "change_pct": 6,  # G
+    "tradetime":  7,  # H
+}
 
 def get_tickers_from_sheet():
-    """Read unique portfolio tickers from Current Positions tab, column B."""
-    tickers = _read_tickers(PORTFOLIO_TAB, PORTFOLIO_RANGE)
-    print(f"Found {len(tickers)} portfolio tickers: {', '.join(tickers)}")
-    return tickers
+    """Read unique portfolio tickers (+ fallback price data) from Current Positions."""
+    rows = _read_tickers_with_fallback(
+        PORTFOLIO_TAB, PORTFOLIO_RANGE, ticker_col_offset=0,
+        field_offsets=PORTFOLIO_FIELD_OFFSETS
+    )
+    print(f"Found {len(rows)} portfolio tickers: {', '.join(r['ticker'] for r in rows)}")
+    return rows
 
 def get_active_watchlist_from_sheet():
-    tickers = _read_tickers(ACTIVE_WATCHLIST_TAB, WATCHLIST_RANGE)
-    print(f"Found {len(tickers)} active watchlist tickers: {', '.join(tickers)}")
-    return tickers
+    rows = _read_tickers_with_fallback(
+        ACTIVE_WATCHLIST_TAB, WATCHLIST_RANGE, ticker_col_offset=0,
+        field_offsets=WATCHLIST_FIELD_OFFSETS
+    )
+    print(f"Found {len(rows)} active watchlist tickers: {', '.join(r['ticker'] for r in rows)}")
+    return rows
 
 def get_monitoring_watchlist_from_sheet():
-    tickers = _read_tickers(MONITORING_WATCHLIST_TAB, WATCHLIST_RANGE)
-    print(f"Found {len(tickers)} monitoring watchlist tickers: {', '.join(tickers)}")
-    return tickers
+    rows = _read_tickers_with_fallback(
+        MONITORING_WATCHLIST_TAB, WATCHLIST_RANGE, ticker_col_offset=0,
+        field_offsets=WATCHLIST_FIELD_OFFSETS
+    )
+    print(f"Found {len(rows)} monitoring watchlist tickers: {', '.join(r['ticker'] for r in rows)}")
+    return rows
 
 def get_reassess_watchlist_from_sheet():
-    tickers = _read_tickers(REASSESS_WATCHLIST_TAB, WATCHLIST_RANGE)
-    print(f"Found {len(tickers)} reassess watchlist tickers: {', '.join(tickers)}")
-    return tickers
+    rows = _read_tickers_with_fallback(
+        REASSESS_WATCHLIST_TAB, WATCHLIST_RANGE, ticker_col_offset=0,
+        field_offsets=WATCHLIST_FIELD_OFFSETS
+    )
+    print(f"Found {len(rows)} reassess watchlist tickers: {', '.join(r['ticker'] for r in rows)}")
+    return rows
 
 def get_long_positions_from_sheet():
-    """Read unique long-position tickers from Long Positions tab, column B."""
-    tickers = _read_tickers(LONG_POSITIONS_TAB, PORTFOLIO_RANGE)
-    print(f"Found {len(tickers)} long position tickers: {', '.join(tickers)}")
-    return tickers
+    """Read unique long-position tickers (+ fallback price data) from Long Positions."""
+    rows = _read_tickers_with_fallback(
+        LONG_POSITIONS_TAB, WATCHLIST_RANGE, ticker_col_offset=0,
+        field_offsets=WATCHLIST_FIELD_OFFSETS
+    )
+    print(f"Found {len(rows)} long position tickers: {', '.join(r['ticker'] for r in rows)}")
+    return rows
 
-# ── Market Data (Massive / Polygon) ──────────────────────────────────────────
+# ── Market Data (Massive / Polygon) with sheet fallback ──────────────────────
 
-def get_quote(ticker):
-    """Fetch previous close price and daily change from Massive/Polygon."""
+def get_quote(ticker, fallback=None):
+    """
+    Fetch previous close price and daily change from Massive/Polygon.
+    If the API returns nothing and a fallback dict (from Google Finance formulas
+    in the sheet) is provided, use that instead and mark the source accordingly.
+    """
     url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/prev"
     params = {"adjusted": "true", "apiKey": POLYGON_API_KEY}
     try:
@@ -107,10 +191,27 @@ def get_quote(ticker):
                 "high":       result["h"],
                 "low":        result["l"],
                 "volume":     result["v"],
-                "change_pct": round(change_pct, 2)
+                "change_pct": round(change_pct, 2),
+                "source":     "Massive/Polygon",
+                "tradetime":  None,
             }
     except Exception as e:
-        print(f"Warning: Could not fetch quote for {ticker}: {e}")
+        print(f"Warning: Could not fetch quote for {ticker} from Massive/Polygon: {e}")
+
+    # Fallback to sheet-provided Google Finance data
+    if fallback and fallback.get("price") is not None:
+        print(f"  Using sheet fallback price data for {ticker}")
+        return {
+            "close":      fallback.get("price"),
+            "open":       fallback.get("open"),
+            "high":       fallback.get("high"),
+            "low":        fallback.get("low"),
+            "volume":     fallback.get("volume"),
+            "change_pct": fallback.get("change_pct"),
+            "source":     "Google Finance (sheet)",
+            "tradetime":  fallback.get("tradetime"),
+        }
+
     return None
 
 # ── News (Finnhub) ────────────────────────────────────────────────────────────
@@ -206,12 +307,17 @@ def get_edgar_filings(ticker):
 
 # ── Data Assembly ─────────────────────────────────────────────────────────────
 
-def build_portfolio_data(tickers):
-    """Fetch quotes, news, and EDGAR filings for all tickers."""
+def build_portfolio_data(ticker_rows):
+    """
+    Fetch quotes (with sheet fallback), news, and EDGAR filings for all tickers.
+    ticker_rows is a list of {"ticker": str, "fallback": dict or None}.
+    """
     portfolio = []
-    for ticker in tickers:
+    for row in ticker_rows:
+        ticker   = row["ticker"]
+        fallback = row.get("fallback")
         print(f"Fetching data for {ticker}...")
-        quote   = get_quote(ticker)
+        quote   = get_quote(ticker, fallback=fallback)
         news    = get_news(ticker)
         filings = get_edgar_filings(ticker)
         time.sleep(0.25)  # gentle rate limiting
@@ -237,15 +343,37 @@ def build_data_block(portfolio):
         data_block += f"\n## {ticker}\n"
 
         if quote:
-            direction   = "▲" if quote["change_pct"] >= 0 else "▼"
-            data_block += (
-                f"Price: ${quote['close']:.2f} "
-                f"{direction} {abs(quote['change_pct'])}% yesterday\n"
-                f"High: ${quote['high']:.2f} | Low: ${quote['low']:.2f} | "
-                f"Volume: {int(quote['volume']):,}\n"
-            )
+            missing = []
+            direction = "▲" if (quote.get("change_pct") or 0) >= 0 else "▼"
+
+            price_line = f"Price: ${quote['close']:.2f}" if quote.get("close") is not None else "Price: unavailable"
+            if quote.get("change_pct") is not None:
+                price_line += f" {direction} {abs(quote['change_pct'])}% yesterday"
+            else:
+                missing.append("change %")
+            data_block += price_line + "\n"
+
+            high = f"${quote['high']:.2f}" if quote.get("high") is not None else "n/a"
+            if quote.get("high") is None:
+                missing.append("high")
+            low = f"${quote['low']:.2f}" if quote.get("low") is not None else "n/a"
+            if quote.get("low") is None:
+                missing.append("low")
+            vol = f"{int(quote['volume']):,}" if quote.get("volume") is not None else "n/a"
+            if quote.get("volume") is None:
+                missing.append("volume")
+            data_block += f"High: {high} | Low: {low} | Volume: {vol}\n"
+
+            source = quote.get("source", "unknown source")
+            data_block += f"Price data source: {source}"
+            if quote.get("tradetime"):
+                data_block += f" (as of {quote['tradetime']})"
+            data_block += "\n"
+
+            if missing:
+                data_block += f"Note: missing fields for this quote: {', '.join(missing)}\n"
         else:
-            data_block += "Price data unavailable\n"
+            data_block += "Price data unavailable from all sources (API and sheet fallback)\n"
 
         if news:
             data_block += "Recent news:\n"
@@ -277,7 +405,15 @@ GROUNDING_INSTRUCTION = (
     "detail that is not directly stated. If data for a ticker is missing, "
     "incomplete, or unclear, say so plainly rather than filling the gap with "
     "a plausible-sounding assumption. It is always better to say \"insufficient "
-    "data\" than to guess."
+    "data\" than to guess.\n\n"
+    "Some price data comes directly from a live market data API (labeled "
+    "'Massive/Polygon'), while other price data is sourced from the investor's "
+    "own spreadsheet, which uses Google Finance formulas (labeled 'Google "
+    "Finance (sheet)'). Both are legitimate current data sources. Where a "
+    "tradetime is given for sheet-sourced data, treat that as the actual "
+    "freshness indicator for that quote rather than assuming it is as current "
+    "as an API-sourced quote. If a quote has missing fields noted, do not "
+    "speculate about the missing values."
 )
 
 # ── Claude Summary (Portfolio) ────────────────────────────────────────────────
@@ -543,9 +679,9 @@ def run_daily_digest():
     print("Starting portfolio digest...")
 
     # Portfolio
-    tickers = get_tickers_from_sheet()
-    if tickers:
-        portfolio = build_portfolio_data(tickers)
+    ticker_rows = get_tickers_from_sheet()
+    if ticker_rows:
+        portfolio = build_portfolio_data(ticker_rows)
         print("Generating portfolio summary with Claude...")
         summary = generate_summary(portfolio)
         print("Sending portfolio email...")
@@ -554,9 +690,9 @@ def run_daily_digest():
         print("No portfolio tickers found, skipping.")
 
     # Tier 1 — Active Watchlist
-    active_tickers = get_active_watchlist_from_sheet()
-    if active_tickers:
-        active_portfolio = build_portfolio_data(active_tickers)
+    active_rows = get_active_watchlist_from_sheet()
+    if active_rows:
+        active_portfolio = build_portfolio_data(active_rows)
         print("Generating active watchlist summary with Claude...")
         active_summary = generate_active_watchlist_summary(active_portfolio)
         print("Sending active watchlist email...")
@@ -565,9 +701,9 @@ def run_daily_digest():
         print("No active watchlist tickers found, skipping.")
 
     # Tier 2 — Monitoring Watchlist
-    monitoring_tickers = get_monitoring_watchlist_from_sheet()
-    if monitoring_tickers:
-        monitoring_portfolio = build_portfolio_data(monitoring_tickers)
+    monitoring_rows = get_monitoring_watchlist_from_sheet()
+    if monitoring_rows:
+        monitoring_portfolio = build_portfolio_data(monitoring_rows)
         print("Generating monitoring watchlist summary with Claude...")
         monitoring_summary = generate_monitoring_watchlist_summary(monitoring_portfolio)
         print("Sending monitoring watchlist email...")
@@ -577,9 +713,9 @@ def run_daily_digest():
 
     # Tier 3 — Reassess Watchlist
     if REASSESS_ENABLED:
-        reassess_tickers = get_reassess_watchlist_from_sheet()
-        if reassess_tickers:
-            reassess_portfolio = build_portfolio_data(reassess_tickers)
+        reassess_rows = get_reassess_watchlist_from_sheet()
+        if reassess_rows:
+            reassess_portfolio = build_portfolio_data(reassess_rows)
             print("Generating reassess watchlist summary with Claude...")
             reassess_summary = generate_reassess_watchlist_summary(reassess_portfolio)
             print("Sending reassess watchlist email...")
@@ -599,9 +735,9 @@ def run_long_positions_digest():
         print("Long positions digest disabled via LONG_POSITIONS_ENABLED flag, skipping.")
         return
 
-    long_tickers = get_long_positions_from_sheet()
-    if long_tickers:
-        long_portfolio = build_portfolio_data(long_tickers)
+    long_rows = get_long_positions_from_sheet()
+    if long_rows:
+        long_portfolio = build_portfolio_data(long_rows)
         print("Generating long positions summary with Claude...")
         long_summary = generate_long_positions_summary(long_portfolio)
         print("Sending long positions email...")
