@@ -1,48 +1,122 @@
-# portfolio-digest
-I wanted to build a tool that would automatically pull my stock holdings from a spreadsheet and deliver a daily email summary of relevant news and price action before market open — I worked through the entire project collaboratively with Claude, using it not just for code generation but as a technical advisor throughout the process.
+# Portfolio Digest
 
-Architecture
+An automated system that reads stock positions and watchlists from a Google Sheet, gathers current pricing, news, and regulatory filings for each ticker, and uses Claude to generate tailored analytical briefings delivered by email — all running on a schedule via GitHub Actions.
 
-The final pipeline has five components working together:
+## What it does
 
-Google Sheets — serves as the input layer, where my ticker symbols live
+Each weekday morning (and on a separate Mon/Wed/Fri schedule for long-term holdings), the system:
 
-Python orchestrator script — fetches data, calls APIs, and ties everything together
+1. Reads ticker lists from designated tabs in a Google Sheet
+2. Fetches price data, recent news, and SEC filings for each ticker
+3. Sends that data to Claude with a purpose-built prompt for each portfolio segment
+4. Emails the resulting briefing
 
-Massive (formerly Polygon.io) + Finnhub — provide daily price data and per-ticker news headlines
+There is no manual step in the daily flow — everything runs automatically once configured.
 
-Claude API — receives all the raw data and generates a detailed, analytical digest
+## Architecture
 
-SendGrid — delivers the finished email each morning
+```
+Google Sheets ──▶ Python script ──▶ Data sources ──▶ Claude API ──▶ Resend ──▶ Email
+                  (GitHub Actions)   (price/news/filings)
+```
 
-GitHub Actions serves as the scheduler and host, running the script automatically on weekdays.
+| Component | Role |
+|---|---|
+| Google Sheets | Source of truth for tickers, positions, and (as a fallback) live prices |
+| GitHub Actions | Scheduler and host — runs the scripts on cron triggers, no server required |
+| Massive (formerly Polygon.io) | Primary price/quote data |
+| Google Finance (via sheet formulas) | Fallback price data for tickers Massive doesn't cover |
+| Finnhub | Primary news source |
+| Google News RSS | Fallback news source |
+| SEC EDGAR | 8-K filing lookups (material events: FDA decisions, trial results, etc.) |
+| Claude API (Sonnet) | Generates the analytical briefing for each segment |
+| Resend | Email delivery |
 
-The Build Process
+## Repository structure
 
-The project started with a feasibility conversation — Claude walked me through the architecture options before writing a single line of code, which helped me understand what I was committing to. Once I decided on the approach, Claude guided me through setting up five separate accounts and credential sets (Google Cloud, GitHub, Anthropic Console, SendGrid, and Finnhub/Massive), explaining each step as we went.
+```
+.
+├── digest.py                      # Main script: daily + long-positions flows
+├── weekly_catalyst_scraper.py     # Weekly script: extracts future catalyst dates into the sheet
+├── requirements.txt
+└── .github/workflows/
+    └── daily_digest.yml           # Defines all three scheduled jobs
+```
 
-The core script came in at around 200 lines of Python across three files: the main script, a requirements file, and a GitHub Actions workflow YAML. Claude wrote all three, with the script designed around my specific sheet structure — column B of a tab called "Investing Dashboard," with an existing header row.
+## Portfolio segments
 
-Troubleshooting
+The system covers six distinct segments, each with its own Google Sheet tab, its own Claude prompt tuned to that segment's purpose, and its own email:
 
-This is where the project got interesting. Several issues came up that required real debugging:
+| Segment | Sheet tab | Purpose | Schedule |
+|---|---|---|---|
+| Current positions | `Current Positions` | Exit-focused: flags declines >7%, low liquidity, downgrades, adverse news/filings | Weekdays |
+| Active watchlist | `1 Active Watchlist` | Entry-focused: highest-conviction near-term candidates | Weekdays |
+| Monitoring watchlist | `2 Monitoring Watchlist` | Signal-watching: flags tickers ready for promotion to Active | Weekdays |
+| Reassess watchlist | `3 Reassess Watchlist` | Keep-or-cut review of underperforming watchlist names | Weekdays (toggle-able) |
+| Long-term holdings | `Long Positions` | Thesis-level review; explicitly ignores daily price noise in favor of multi-month fundamentals | Mon/Wed/Fri |
+| Upcoming catalysts | `Upcoming Events` (written to, not read from) | Auto-populated calendar of future binary events (PDUFA dates, trial readouts, etc.) extracted from news | Weekly (Tuesdays) |
 
-403 authentication error — the script was trying to use the Google Drive API to locate the spreadsheet by name, but the service account only had Sheets API scope. Fixed by hardcoding the spreadsheet ID directly and removing the Drive API dependency entirely.
+Each portfolio/watchlist tab expects tickers in a fixed column with a header row (see column layout below). Tabs can be toggled on/off independently via GitHub Secrets without any code changes.
 
-Wrong data being read — the script was reading dollar values and dates instead of tickers, because it wasn't specifying the correct sheet tab. Fixed by adding a `SHEET_TAB` variable to the configuration and updating the range reference to `"Investing Dashboard!B2:B200"`.
+## Data flow per ticker
 
-GitHub Actions timing delays — the scheduled 7am delivery arrived at 10:40am on the first run, which turned out to be a well-documented platform limitation rather than a bug. Addressed by moving the scheduled time to 5am ET to build in a buffer.
+For every ticker in a given segment, the script gathers:
 
-Polygon.io rebrand — mid-project I noticed references to a service called Massive instead of Polygon.io. A quick check confirmed it was simply a rebrand with no API changes required.
+1. **Price/quote data** — tries Massive/Polygon first; if unavailable, falls back to Google Finance formulas already maintained in the sheet (price, open, high, low, volume, % change, trade time)
+2. **News** — tries Finnhub first (last 24 hours); falls back to Google News RSS if empty
+3. **SEC filings** — checks EDGAR for 8-K filings in the past 48 hours
 
-What Claude's Role Actually Looked Like
+All of this is compiled into a structured data block and passed to Claude along with a segment-specific prompt. Claude is explicitly instructed to only use the data provided — not to infer or fill gaps from general knowledge — and to flag missing data rather than guess.
 
-Claude functioned less like an autocomplete tool and more like a senior developer sitting alongside me. It designed the architecture, wrote all the code, explained what each component was doing and why, diagnosed errors from raw log output, and suggested fixes. When I asked questions — like whether Editor vs. Viewer access mattered for the service account, or whether the API billed separately from my Claude.ai subscription — it answered them directly rather than just generating more code.
+## Sheet column layout
 
-That said, the human judgment calls were mine: which approach to take, when to try a simpler fix before a more complex one, and how to structure my existing spreadsheet. The debugging loop in particular required back-and-forth — I'd share an error or a screenshot, Claude would interpret it and propose a fix, and I'd implement and report back.
+**Current Positions** (`Current Positions` tab):
+| Column | B | C | D | E | F | G | H | I | J | K | L | M |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Field | Ticker | Qty | Entry Price | Entry Position | Current Price | Current Position | Price at Open | High | Low | Volume | Change % | Tradetime |
 
-End Result
+**Watchlist tiers and Long Positions** (same layout across all four tabs):
+| Column | A | B | C | D | E | F | G | H |
+|---|---|---|---|---|---|---|---|---|
+| Field | Ticker | Current Price | Price at Open | High | Low | Volume | Change % | Tradetime |
 
-A fully automated pipeline that reads my portfolio from Google Sheets every weekday morning and delivers a detailed pre-market briefing to my inbox — covering price action, news summaries, risk flags, and cross-portfolio themes — for roughly $1-3/month in API costs.
+Columns beyond Ticker on watchlist/long-position tabs are populated with `GOOGLEFINANCE()` formulas and serve purely as the price fallback source.
 
-The most useful takeaway from a vibe coding perspective: Claude is most effective when you treat it as a collaborator you're explaining your actual situation to, rather than a search engine you're querying for code snippets. The more context I gave — showing screenshots, pasting exact error messages, describing my sheet structure — the faster and more accurately it could help.
+## Configuration (GitHub Secrets)
+
+| Secret | Purpose |
+|---|---|
+| `GOOGLE_CREDENTIALS` | Service account JSON for Sheets API access |
+| `SPREADSHEET_ID` | Target spreadsheet ID |
+| `ANTHROPIC_API_KEY` | Claude API access |
+| `RESEND_API_KEY` | Email delivery |
+| `SENDER_EMAIL` / `RECIPIENT_EMAIL` | Email addresses (sends from `onboarding@resend.dev`, to your own verified address) |
+| `FINNHUB_API_KEY` | News data |
+| `POLYGON_API_KEY` | Price data (Massive/Polygon) |
+| `REASSESS_ENABLED` | `true`/`false` — toggles the Reassess Watchlist email on/off |
+| `LONG_POSITIONS_ENABLED` | `true`/`false` — toggles the Long Positions email on/off |
+
+## Schedule
+
+Defined in `.github/workflows/daily_digest.yml`, all times in UTC (ET + buffer to absorb GitHub Actions scheduling delays):
+
+- **Daily digest** (`0 10 * * 1-5`) — Portfolio, Active, Monitoring, and Reassess emails, weekdays
+- **Weekly catalyst scraper** (`0 10 * * 2`) — Tuesdays, scans news for future binary events and writes them to the `Upcoming Events` tab
+- **Long positions digest** (`0 10 * * 1,3,5`) — Monday/Wednesday/Friday
+
+All jobs also support manual triggering via `workflow_dispatch` in the GitHub Actions UI, which is the recommended way to test changes before merging.
+
+## Design principles
+
+- **Segment-appropriate prompts** — each portfolio segment gets language matched to its actual purpose (exit discipline for active trades, thesis review for long-term holds, promotion/demotion logic for watchlist tiers) rather than one generic summary format
+- **Grounding over fabrication** — prompts explicitly instruct Claude to only use provided data and to state "insufficient data" rather than guess, given the risk of hallucinated analysis on sparse micro-cap news coverage
+- **Graceful degradation** — every data source (price, news) has a fallback, and missing data is surfaced to the reader rather than silently dropped or invented
+- **Toggle over delete** — segments can be turned off via secrets without touching code, useful for tiers that are empty or temporarily irrelevant
+- **Deduplication by default** — ticker lists are deduplicated on read, since source sheets are populated by formulas/queries that can produce duplicates
+
+## Known limitations
+
+- Massive/Polygon's free tier has coverage gaps on micro-cap and OTC tickers, partially mitigated by the Google Finance sheet fallback
+- Google News RSS is an unofficial/unsupported feed and may occasionally require maintenance if its format changes
+- GitHub Actions scheduled triggers are not time-precise (can run late); schedules are set earlier than the target delivery time to compensate
+- Resend's free tier sends from a shared address (`onboarding@resend.dev`) and can only send to verified recipient addresses — appropriate for personal use, not for sending to third parties
