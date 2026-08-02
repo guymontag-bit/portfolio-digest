@@ -14,13 +14,19 @@ import resend
 
 SPREADSHEET_ID           = os.environ["SPREADSHEET_ID"]
 
+# Current Positions and Long Positions share the same column layout:
+# B=Ticker, C=Qty, D=Entry Price, E=Entry Position, F=Current Price,
+# G=Current Position, H=Price at Open, I=High, J=Low, K=Volume, L=Change %, M=Tradetime
 PORTFOLIO_TAB             = "Current Positions"
-PORTFOLIO_RANGE           = "B2:M200"   # ticker in B, price fields F/H/I/J/K/L/M
+LONG_POSITIONS_TAB        = "Long Positions"
+POSITION_RANGE            = "B2:M200"
+
+# Watchlist tabs are ticker-only plus price fallback columns:
+# A=Ticker, B=Current Price, C=Price at Open, D=High, E=Low, F=Volume, G=Change %, H=Tradetime
 ACTIVE_WATCHLIST_TAB      = "1 Active Watchlist"
 MONITORING_WATCHLIST_TAB  = "2 Monitoring Watchlist"
 REASSESS_WATCHLIST_TAB    = "3 Reassess Watchlist"
-LONG_POSITIONS_TAB        = "Long Positions"
-WATCHLIST_RANGE           = "A2:H200"   # ticker in A, price fields B/C/D/E/F/G/H
+WATCHLIST_RANGE           = "A2:H200"
 
 REASSESS_ENABLED       = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
 LONG_POSITIONS_ENABLED = os.environ.get("LONG_POSITIONS_ENABLED", "true").lower() == "true"
@@ -31,6 +37,32 @@ ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
 RESEND_API_KEY     = os.environ["RESEND_API_KEY"]
 FINNHUB_API_KEY    = os.environ["FINNHUB_API_KEY"]
 POLYGON_API_KEY    = os.environ["POLYGON_API_KEY"]
+
+# Column offsets relative to each range's starting column
+PORTFOLIO_FIELD_OFFSETS = {  # relative to B (B=0)
+    "price":      4,  # F
+    "open":       6,  # H
+    "high":       7,  # I
+    "low":        8,  # J
+    "volume":     9,  # K
+    "change_pct": 10, # L
+    "tradetime":  11, # M
+}
+POSITION_FIELD_OFFSETS = {  # relative to B (B=0) — qty/cost basis fields
+    "qty":          1,  # C
+    "entry_price":  2,  # D
+    "entry_value":  3,  # E
+    "current_value":5,  # G
+}
+WATCHLIST_FIELD_OFFSETS = {  # relative to A (A=0)
+    "price":      1,  # B
+    "open":       2,  # C
+    "high":       3,  # D
+    "low":        4,  # E
+    "volume":     5,  # F
+    "change_pct": 6,  # G
+    "tradetime":  7,  # H
+}
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 
@@ -55,13 +87,14 @@ def _safe_float(value):
     except ValueError:
         return None
 
-def _read_tickers_with_fallback(tab, cell_range, ticker_col_offset, field_offsets):
+def _read_tickers_with_fallback(tab, cell_range, ticker_col_offset, field_offsets,
+                                 position_offsets=None):
     """
     Generic helper: read tickers plus optional Google Finance fallback price fields
-    from a named tab. field_offsets maps field name -> column offset (relative to
-    the start of cell_range) for price, open, high, low, volume, change_pct, tradetime.
+    (and optionally position/cost-basis fields) from a named tab.
 
-    Returns a deduplicated list of dicts: {"ticker": str, "fallback": {...} or None}
+    Returns a deduplicated list of dicts:
+      {"ticker": str, "fallback": {...} or None, "position": {...} or None}
     """
     service = _sheet_service()
     result = service.spreadsheets().values().get(
@@ -95,41 +128,34 @@ def _read_tickers_with_fallback(tab, cell_range, ticker_col_offset, field_offset
             "change_pct": _safe_float(cell(field_offsets["change_pct"])),
             "tradetime":  cell(field_offsets["tradetime"]),
         }
-        # Only keep fallback if at least the price field is present
         if fallback["price"] is None:
             fallback = None
 
-        rows.append({"ticker": ticker, "fallback": fallback})
+        position = None
+        if position_offsets:
+            qty           = _safe_float(cell(position_offsets["qty"]))
+            entry_price   = _safe_float(cell(position_offsets["entry_price"]))
+            entry_value   = _safe_float(cell(position_offsets["entry_value"]))
+            current_value = _safe_float(cell(position_offsets["current_value"]))
+            if any(v is not None for v in (qty, entry_price, entry_value, current_value)):
+                position = {
+                    "qty":           qty,
+                    "entry_price":   entry_price,
+                    "entry_value":   entry_value,
+                    "current_value": current_value,
+                }
+
+        rows.append({"ticker": ticker, "fallback": fallback, "position": position})
 
     return rows
 
-# Column offsets relative to each range's starting column
-PORTFOLIO_FIELD_OFFSETS = {
-    # range starts at B, so offsets are relative to B (B=0)
-    "price":      4,  # F
-    "open":       6,  # H
-    "high":       7,  # I
-    "low":        8,  # J
-    "volume":     9,  # K
-    "change_pct": 10, # L
-    "tradetime":  11, # M
-}
-WATCHLIST_FIELD_OFFSETS = {
-    # range starts at A, so offsets are relative to A (A=0)
-    "price":      1,  # B
-    "open":       2,  # C
-    "high":       3,  # D
-    "low":        4,  # E
-    "volume":     5,  # F
-    "change_pct": 6,  # G
-    "tradetime":  7,  # H
-}
-
 def get_tickers_from_sheet():
-    """Read unique portfolio tickers (+ fallback price data) from Current Positions."""
+    """Read unique portfolio tickers, price fallback data, and position data
+    from Current Positions."""
     rows = _read_tickers_with_fallback(
-        PORTFOLIO_TAB, PORTFOLIO_RANGE, ticker_col_offset=0,
-        field_offsets=PORTFOLIO_FIELD_OFFSETS
+        PORTFOLIO_TAB, POSITION_RANGE, ticker_col_offset=0,
+        field_offsets=PORTFOLIO_FIELD_OFFSETS,
+        position_offsets=POSITION_FIELD_OFFSETS
     )
     print(f"Found {len(rows)} portfolio tickers: {', '.join(r['ticker'] for r in rows)}")
     return rows
@@ -159,13 +185,26 @@ def get_reassess_watchlist_from_sheet():
     return rows
 
 def get_long_positions_from_sheet():
-    """Read unique long-position tickers (+ fallback price data) from Long Positions."""
+    """Read unique long-position tickers, price fallback data, and position data
+    from Long Positions (same column layout as Current Positions)."""
     rows = _read_tickers_with_fallback(
-        LONG_POSITIONS_TAB, WATCHLIST_RANGE, ticker_col_offset=0,
-        field_offsets=WATCHLIST_FIELD_OFFSETS
+        LONG_POSITIONS_TAB, POSITION_RANGE, ticker_col_offset=0,
+        field_offsets=PORTFOLIO_FIELD_OFFSETS,
+        position_offsets=POSITION_FIELD_OFFSETS
     )
     print(f"Found {len(rows)} long position tickers: {', '.join(r['ticker'] for r in rows)}")
     return rows
+
+def compute_total_value(ticker_rows):
+    """Sum current_value across all rows that have it, for % of portfolio calculations."""
+    total = 0.0
+    have_any = False
+    for row in ticker_rows:
+        pos = row.get("position")
+        if pos and pos.get("current_value") is not None:
+            total += pos["current_value"]
+            have_any = True
+    return total if have_any else None
 
 # ── Market Data (Massive / Polygon) with sheet fallback ──────────────────────
 
@@ -198,7 +237,6 @@ def get_quote(ticker, fallback=None):
     except Exception as e:
         print(f"Warning: Could not fetch quote for {ticker} from Massive/Polygon: {e}")
 
-    # Fallback to sheet-provided Google Finance data
     if fallback and fallback.get("price") is not None:
         print(f"  Using sheet fallback price data for {ticker}")
         return {
@@ -307,25 +345,53 @@ def get_edgar_filings(ticker):
 
 # ── Data Assembly ─────────────────────────────────────────────────────────────
 
-def build_portfolio_data(ticker_rows):
+def build_portfolio_data(ticker_rows, total_value=None):
     """
     Fetch quotes (with sheet fallback), news, and EDGAR filings for all tickers.
-    ticker_rows is a list of {"ticker": str, "fallback": dict or None}.
+    ticker_rows is a list of {"ticker", "fallback", "position"}.
+    total_value, if provided, is used to compute % of portfolio per holding.
     """
     portfolio = []
     for row in ticker_rows:
         ticker   = row["ticker"]
         fallback = row.get("fallback")
+        position = row.get("position")
         print(f"Fetching data for {ticker}...")
         quote   = get_quote(ticker, fallback=fallback)
         news    = get_news(ticker)
         filings = get_edgar_filings(ticker)
         time.sleep(0.25)  # gentle rate limiting
+
+        position_metrics = None
+        if position:
+            unrealized_pct = None
+            entry_value   = position.get("entry_value")
+            current_value = position.get("current_value")
+            entry_price   = position.get("entry_price")
+
+            if entry_value is not None and entry_value != 0 and current_value is not None:
+                unrealized_pct = round((current_value - entry_value) / entry_value * 100, 2)
+            elif entry_price is not None and entry_price != 0 and quote and quote.get("close") is not None:
+                unrealized_pct = round((quote["close"] - entry_price) / entry_price * 100, 2)
+
+            pct_of_portfolio = None
+            if total_value and current_value is not None and total_value != 0:
+                pct_of_portfolio = round((current_value / total_value) * 100, 2)
+
+            position_metrics = {
+                "qty":               position.get("qty"),
+                "entry_price":       entry_price,
+                "current_value":     current_value,
+                "unrealized_pct":    unrealized_pct,
+                "pct_of_portfolio":  pct_of_portfolio,
+            }
+
         portfolio.append({
-            "ticker":  ticker,
-            "quote":   quote,
-            "news":    news,
-            "filings": filings
+            "ticker":   ticker,
+            "quote":    quote,
+            "news":     news,
+            "filings":  filings,
+            "position": position_metrics
         })
     return portfolio
 
@@ -335,10 +401,11 @@ def build_data_block(portfolio):
     """Build a readable text block from portfolio data for Claude prompts."""
     data_block = ""
     for holding in portfolio:
-        ticker  = holding["ticker"]
-        quote   = holding["quote"]
-        news    = holding["news"]
-        filings = holding.get("filings", [])
+        ticker   = holding["ticker"]
+        quote    = holding["quote"]
+        news     = holding["news"]
+        filings  = holding.get("filings", [])
+        position = holding.get("position")
 
         data_block += f"\n## {ticker}\n"
 
@@ -374,6 +441,22 @@ def build_data_block(portfolio):
                 data_block += f"Note: missing fields for this quote: {', '.join(missing)}\n"
         else:
             data_block += "Price data unavailable from all sources (API and sheet fallback)\n"
+
+        if position:
+            pos_parts = []
+            if position.get("qty") is not None:
+                pos_parts.append(f"{position['qty']:g} shares")
+            if position.get("entry_price") is not None:
+                pos_parts.append(f"entry ${position['entry_price']:.2f}")
+            if position.get("unrealized_pct") is not None:
+                sign = "+" if position["unrealized_pct"] >= 0 else ""
+                pos_parts.append(f"{sign}{position['unrealized_pct']}% unrealized")
+            if position.get("pct_of_portfolio") is not None:
+                pos_parts.append(f"{position['pct_of_portfolio']}% of portfolio")
+            if pos_parts:
+                data_block += "Position: " + " | ".join(pos_parts) + "\n"
+            else:
+                data_block += "Position: held, but size/cost-basis data unavailable\n"
 
         if news:
             data_block += "Recent news:\n"
@@ -413,24 +496,35 @@ GROUNDING_INSTRUCTION = (
     "tradetime is given for sheet-sourced data, treat that as the actual "
     "freshness indicator for that quote rather than assuming it is as current "
     "as an API-sourced quote. If a quote has missing fields noted, do not "
-    "speculate about the missing values."
+    "speculate about the missing values.\n\n"
+    "Where a 'Position:' line is present, this is factual position data from "
+    "the investor's own records: share count, entry price, unrealized gain/loss "
+    "%, and % of total portfolio value. Treat this as ground truth and weigh it "
+    "directly in your analysis — do not estimate or infer position size or cost "
+    "basis for a holding where this line is absent."
 )
 
 # ── Claude Summary (Portfolio) ────────────────────────────────────────────────
 
 def generate_summary(portfolio):
-    """Generate exit-focused portfolio digest via Claude."""
+    """Generate exit-focused portfolio digest via Claude, weighing cost basis and position size."""
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
     data_block = build_data_block(portfolio)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
 
     prompt = f"""You are a trading assistant helping a retail investor manage a small hobby portfolio of micro-cap and speculative stocks. The investor's strategy is short holding periods with small positions, looking to exit as quickly as possible when negative signals appear.
 
-Today is {today_str}. Below is the portfolio data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each holding.
+Today is {today_str}. Below is the portfolio data including yesterday's price action, recent news, any SEC EDGAR 8-K filings from the past 48 hours, and position data (share count, entry price, unrealized gain/loss, and % of total portfolio) for each holding.
 
 {GROUNDING_INSTRUCTION}
 
 {data_block}
+
+POSITION-AWARE ANALYSIS: When evaluating exit signals, explicitly weigh position context, not just price/news signals in isolation:
+- A decline on a position already at an unrealized loss is more urgent than the same decline on a position with a cushion of unrealized gains
+- A decline on a holding that represents a large % of total portfolio value deserves more attention than the same decline on a small position
+- Where position data is available, reference it directly (e.g. "this position is already down X% from entry" or "this is Y% of the total portfolio, the largest/one of the larger holdings")
+- Where position data is missing for a holding, do not assume a size or cost basis — just proceed with signal-based analysis for that ticker
 
 Write a focused daily portfolio briefing structured as follows:
 
@@ -440,10 +534,11 @@ Write a focused daily portfolio briefing structured as follows:
    - Analyst downgrade or price target cut
    - Negative company-specific news: FDA rejection, clinical trial failure, earnings miss, insider selling, SEC filing concerns
    - Any material negative 8-K filing (e.g. going concern, restatement, adverse event, CRL)
-   For each flagged holding, state clearly: what the signal is, why it matters, and whether it suggests an exit should be considered.
+   For each flagged holding, state clearly: what the signal is, why it matters, whether position context (unrealized P&L, portfolio weight) raises or lowers urgency, and whether an exit should be considered.
 
 2. HOLDING-BY-HOLDING BREAKDOWN — For each position not already flagged for exit:
    - Price action and volume summary
+   - Position context (unrealized P&L, % of portfolio) where available
    - Any company-specific news or EDGAR filings and what they mean for this holding
    - One-line bottom line: hold, watch, or investigate further
 
@@ -591,14 +686,14 @@ Be direct and unsentimental. The purpose of this list is to cut underperformers 
 # ── Claude Summary (Long Positions) ──────────────────────────────────────────
 
 def generate_long_positions_summary(portfolio):
-    """Generate a thesis-level digest for long-term core holdings via Claude."""
+    """Generate a thesis-level digest for long-term core holdings via Claude, weighing cost basis and position size."""
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
     data_block = build_data_block(portfolio)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
 
     prompt = f"""You are a trading assistant helping a retail investor manage a small core of long-term positions held for stability alongside a much more active, short-term speculative portfolio. These are NOT short-term trades. The investor's intended holding period for these names is months, potentially many months to years, not days or weeks.
 
-Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each holding.
+Today is {today_str}. Below is data including yesterday's price action, recent news, any SEC EDGAR 8-K filings from the past 48 hours, and position data (share count, entry price, unrealized gain/loss, and % of total long-term portfolio) for each holding.
 
 {GROUNDING_INSTRUCTION}
 
@@ -610,16 +705,24 @@ CRITICAL FRAMING: Evaluate everything through a multi-month time horizon. Daily 
 - Leadership or strategic direction changes
 - Regulatory developments with long-term implications (not just near-term binary catalysts)
 
+POSITION-AWARE ANALYSIS: Where position data is available, incorporate it into the thesis-level view — not as a trading signal, but as long-term risk context:
+- Note unrealized gain/loss as an indicator of how the position has performed against the original long-term thesis, not as a reason to act on short-term movement
+- Note % of total long-term portfolio to flag concentration risk if one holding has grown to dominate the long-term core
+- Where position data is missing for a holding, do not assume a size or cost basis — proceed with thesis-level analysis for that ticker regardless
+
 Write a focused long-term holdings briefing structured as follows:
 
 1. THESIS-CHANGING DEVELOPMENTS — Lead with any holding where something has emerged that could meaningfully alter the long-term investment case, positive or negative. For each, explain what changed and why it matters for the multi-month-to-year outlook, not for tomorrow's trading session.
 
 2. HOLDING-BY-HOLDING BREAKDOWN — For each position not already covered above:
    - Brief price context (one line, de-emphasized)
+   - Position context (unrealized P&L, % of long-term portfolio) where available
    - Any fundamental or strategic news and what it means for the long-term thesis
    - One-line bottom line: thesis intact, thesis strengthening, or thesis warrants review
 
-3. THINGS TO MONITOR — 3-5 items relevant to the long-term thesis of these holdings that may develop over the coming weeks to months (e.g. upcoming earnings, expected data readouts, sector trends). This is not a daily action list.
+3. CONCENTRATION CHECK — Briefly note if any single holding now represents an outsized share of the long-term portfolio, based on the position data provided.
+
+4. THINGS TO MONITOR — 3-5 items relevant to the long-term thesis of these holdings that may develop over the coming weeks to months (e.g. upcoming earnings, expected data readouts, sector trends). This is not a daily action list.
 
 Be calm, measured, and long-horizon in tone — this briefing should read differently from a short-term trading digest. If there is nothing thesis-relevant for a holding, say so briefly and move on rather than manufacturing urgency."""
 
@@ -681,7 +784,8 @@ def run_daily_digest():
     # Portfolio
     ticker_rows = get_tickers_from_sheet()
     if ticker_rows:
-        portfolio = build_portfolio_data(ticker_rows)
+        total_value = compute_total_value(ticker_rows)
+        portfolio = build_portfolio_data(ticker_rows, total_value=total_value)
         print("Generating portfolio summary with Claude...")
         summary = generate_summary(portfolio)
         print("Sending portfolio email...")
@@ -737,7 +841,8 @@ def run_long_positions_digest():
 
     long_rows = get_long_positions_from_sheet()
     if long_rows:
-        long_portfolio = build_portfolio_data(long_rows)
+        total_value = compute_total_value(long_rows)
+        long_portfolio = build_portfolio_data(long_rows, total_value=total_value)
         print("Generating long positions summary with Claude...")
         long_summary = generate_long_positions_summary(long_portfolio)
         print("Sending long positions email...")
