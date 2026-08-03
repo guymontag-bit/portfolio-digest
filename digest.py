@@ -480,6 +480,41 @@ def build_data_block(portfolio):
 
     return data_block
 
+# ── Data Coverage Tracking ────────────────────────────────────────────────────
+
+def classify_quote_completeness(quote):
+    """Classify a quote's completeness: 'none', 'partial', or 'full'."""
+    if not quote:
+        return "none"
+    fields = ["close", "high", "low", "volume", "change_pct"]
+    missing = [f for f in fields if quote.get(f) is None]
+    return "partial" if missing else "full"
+
+def compute_coverage_summary(portfolio):
+    """Build a short data-coverage line summarizing quote completeness across a run."""
+    full = partial = none = 0
+    partial_tickers = []
+    none_tickers = []
+
+    for holding in portfolio:
+        status = classify_quote_completeness(holding.get("quote"))
+        if status == "full":
+            full += 1
+        elif status == "partial":
+            partial += 1
+            partial_tickers.append(holding["ticker"])
+        else:
+            none += 1
+            none_tickers.append(holding["ticker"])
+
+    total = full + partial + none
+    line = f"Data coverage: {full}/{total} complete"
+    if partial:
+        line += f", {partial} partial ({', '.join(partial_tickers)})"
+    if none:
+        line += f", {none} no data ({', '.join(none_tickers)})"
+    return line
+
 # ── Shared grounding instruction ──────────────────────────────────────────────
 
 GROUNDING_INSTRUCTION = (
@@ -788,6 +823,9 @@ def run_daily_digest():
         portfolio = build_portfolio_data(ticker_rows, total_value=total_value)
         print("Generating portfolio summary with Claude...")
         summary = generate_summary(portfolio)
+        coverage_line = compute_coverage_summary(portfolio)
+        summary = f"{coverage_line}\n\n{summary}"
+        print(f"  {coverage_line}")
         print("Sending portfolio email...")
         send_email(summary)
     else:
@@ -799,6 +837,9 @@ def run_daily_digest():
         active_portfolio = build_portfolio_data(active_rows)
         print("Generating active watchlist summary with Claude...")
         active_summary = generate_active_watchlist_summary(active_portfolio)
+        coverage_line = compute_coverage_summary(active_portfolio)
+        active_summary = f"{coverage_line}\n\n{active_summary}"
+        print(f"  {coverage_line}")
         print("Sending active watchlist email...")
         send_active_watchlist_email(active_summary)
     else:
@@ -810,6 +851,9 @@ def run_daily_digest():
         monitoring_portfolio = build_portfolio_data(monitoring_rows)
         print("Generating monitoring watchlist summary with Claude...")
         monitoring_summary = generate_monitoring_watchlist_summary(monitoring_portfolio)
+        coverage_line = compute_coverage_summary(monitoring_portfolio)
+        monitoring_summary = f"{coverage_line}\n\n{monitoring_summary}"
+        print(f"  {coverage_line}")
         print("Sending monitoring watchlist email...")
         send_monitoring_watchlist_email(monitoring_summary)
     else:
@@ -822,6 +866,9 @@ def run_daily_digest():
             reassess_portfolio = build_portfolio_data(reassess_rows)
             print("Generating reassess watchlist summary with Claude...")
             reassess_summary = generate_reassess_watchlist_summary(reassess_portfolio)
+            coverage_line = compute_coverage_summary(reassess_portfolio)
+            reassess_summary = f"{coverage_line}\n\n{reassess_summary}"
+            print(f"  {coverage_line}")
             print("Sending reassess watchlist email...")
             send_reassess_watchlist_email(reassess_summary)
         else:
@@ -845,6 +892,9 @@ def run_long_positions_digest():
         long_portfolio = build_portfolio_data(long_rows, total_value=total_value)
         print("Generating long positions summary with Claude...")
         long_summary = generate_long_positions_summary(long_portfolio)
+        coverage_line = compute_coverage_summary(long_portfolio)
+        long_summary = f"{coverage_line}\n\n{long_summary}"
+        print(f"  {coverage_line}")
         print("Sending long positions email...")
         send_long_positions_email(long_summary)
     else:
