@@ -31,6 +31,12 @@ WATCHLIST_RANGE           = "A2:H200"
 REASSESS_ENABLED       = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
 LONG_POSITIONS_ENABLED = os.environ.get("LONG_POSITIONS_ENABLED", "true").lower() == "true"
 
+# Signal Log — feedback-loop record of EXIT FLAG / ENTRY OPPORTUNITY / RISK FLAG
+# signals, scoped to Current Positions and Active Watchlist only (see columns A-O)
+SIGNAL_LOG_TAB     = "Signal Log"
+SIGNAL_LOG_RANGE   = "A:O"
+SIGNAL_LOG_ENABLED = os.environ.get("SIGNAL_LOG_ENABLED", "true").lower() == "true"
+
 RECIPIENT_EMAIL   = os.environ["RECIPIENT_EMAIL"]
 SENDER_EMAIL       = os.environ["SENDER_EMAIL"]
 ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
@@ -67,11 +73,17 @@ WATCHLIST_FIELD_OFFSETS = {  # relative to A (A=0)
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 
 def _sheet_service():
-    """Return an authenticated Google Sheets service."""
+    """
+    Return an authenticated Google Sheets service.
+    Uses read/write scope (not readonly) so this same service can also append
+    rows to the Signal Log tab — the catalyst scraper already writes to this
+    spreadsheet with this scope under the same service account, so no new
+    sharing/permission setup should be needed.
+    """
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = Credentials.from_service_account_info(
         creds_json,
-        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     return build("sheets", "v4", credentials=creds)
 
@@ -515,6 +527,160 @@ def compute_coverage_summary(portfolio):
         line += f", {none} no data ({', '.join(none_tickers)})"
     return line
 
+# ── Signal Log (feedback loop) ────────────────────────────────────────────────
+#
+# Scope: Current Positions and Active Watchlist only. Monitoring, Reassess, and
+# Long Positions are intentionally not logged — see project notes on avoiding
+# diluted hit-rate numbers from lower-conviction tiers.
+#
+# Design: the digest prompts above are left untouched. A separate, cheap Claude
+# call reads the digest's own prose after it's generated and extracts only the
+# already-flagged tickers into structured form. This mirrors the extraction
+# pattern already used in weekly_catalyst_scraper.py (extract_events_with_claude)
+# rather than asking the main prompt to also emit JSON, which would risk
+# leaking structured output into the emailed briefing.
+#
+# The log deliberately does not ask Claude to grade or score its own flags —
+# it only records what was flagged and why, in Claude's own words. Judgment on
+# whether a flag was "correct" belongs to a future scoring pass, not this one.
+
+def extract_signals_with_claude(portfolio, summary_text, segment):
+    """
+    Extract structured signals from a digest's own prose for Signal Log purposes.
+    segment must be "Current Position" or "Active".
+    Returns a list of dicts: {"ticker", "signal_type", "trigger_basis", "reasoning_snippet"}
+    """
+    if not summary_text or not summary_text.strip():
+        return []
+
+    tickers = [h["ticker"] for h in portfolio]
+    if not tickers:
+        return []
+
+    if segment == "Current Position":
+        section_guidance = (
+            'Only extract signals from the "EXIT FLAGS" section. Every extracted '
+            'signal must use "signal_type": "EXIT FLAG". If that section says '
+            'nothing was flagged, return [].'
+        )
+    else:  # "Active"
+        section_guidance = (
+            'Extract signals from two sections only. From "ENTRY OPPORTUNITIES", '
+            'use "signal_type": "ENTRY OPPORTUNITY". From "RISK FLAGS", use '
+            '"signal_type": "RISK FLAG". Ignore all other sections. If neither '
+            'section flags anything, return [].'
+        )
+
+    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+    prompt = f"""Below is a daily briefing you just wrote for a retail investor's {segment} tickers: {', '.join(tickers)}.
+
+{section_guidance}
+
+For each qualifying flagged ticker, extract:
+- "ticker": string, must be exactly one of: {', '.join(tickers)}
+- "signal_type": string, exactly as specified above
+- "trigger_basis": string, max 40 chars — the specific fact that tripped the flag (e.g. "8-K filed", "7% decline", "analyst upgrade"), not a restatement of the signal type
+- "reasoning_snippet": string, max 150 chars — one-line summary in your own words of why this was flagged
+
+Respond ONLY with a JSON array, no other text. If nothing qualifies, respond with [].
+
+Briefing:
+{summary_text}"""
+
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.content[0].text.strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        signals = json.loads(raw)
+        if not isinstance(signals, list):
+            return []
+        valid_tickers = set(tickers)
+        return [s for s in signals if isinstance(s, dict) and s.get("ticker") in valid_tickers]
+    except Exception as e:
+        print(f"  Warning: signal extraction failed for {segment}: {e}")
+        return []
+
+def _position_context_string(position):
+    """Build the Position Context column string from position metrics, or '' if none."""
+    if not position:
+        return ""
+    parts = []
+    if position.get("unrealized_pct") is not None:
+        sign = "+" if position["unrealized_pct"] >= 0 else ""
+        parts.append(f"{sign}{position['unrealized_pct']}% unrealized")
+    if position.get("pct_of_portfolio") is not None:
+        parts.append(f"{position['pct_of_portfolio']}% of portfolio")
+    return " | ".join(parts)
+
+def build_signal_log_rows(portfolio, signals, segment, log_date, id_counters):
+    """
+    Convert extracted signals + portfolio data into Signal Log rows (columns A-O).
+    id_counters is a dict shared across the whole run, used to keep Log IDs
+    unique if the same ticker is flagged more than once on the same day.
+    """
+    quote_by_ticker    = {h["ticker"]: h.get("quote") for h in portfolio}
+    position_by_ticker = {h["ticker"]: h.get("position") for h in portfolio}
+    date_str = log_date.strftime("%Y-%m-%d")
+    stamp    = log_date.strftime("%Y%m%d")
+
+    rows = []
+    for sig in signals:
+        ticker = sig.get("ticker", "").strip().upper()
+        if not ticker:
+            continue
+
+        n = id_counters.get(ticker, 0) + 1
+        id_counters[ticker] = n
+        log_id = f"{ticker}-{stamp}-{n}"
+
+        quote = quote_by_ticker.get(ticker)
+        price_at_flag = quote.get("close") if quote and quote.get("close") is not None else ""
+
+        position_context = _position_context_string(position_by_ticker.get(ticker))
+
+        rows.append([
+            log_id,                                    # A Log ID
+            date_str,                                   # B Date Flagged
+            ticker,                                      # C Ticker
+            segment,                                     # D Segment
+            sig.get("signal_type", ""),                  # E Signal Type
+            price_at_flag,                                # F Price at Flag
+            sig.get("reasoning_snippet", "")[:150],       # G Reasoning Snippet
+            sig.get("trigger_basis", "")[:40],            # H Trigger Basis
+            position_context,                             # I Position Context
+            False,                                        # J Resolved
+            "", "", "",                                   # K/L/M Price +5D/+10D/+20D
+            "",                                            # N Outcome
+            "",                                            # O Notes
+        ])
+    return rows
+
+def append_signal_log_rows(service, rows):
+    """Append rows to the Signal Log tab. Append-only — never mutates existing rows."""
+    if not rows:
+        return
+    service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{SIGNAL_LOG_TAB}!{SIGNAL_LOG_RANGE}",
+        valueInputOption="RAW",
+        insertDataOption="INSERT_ROWS",
+        body={"values": rows}
+    ).execute()
+
+def log_signals_to_sheet(service, portfolio, summary_text, segment, id_counters):
+    """Extract and append signals for one segment's digest run. Safe to call even if empty."""
+    signals = extract_signals_with_claude(portfolio, summary_text, segment)
+    if not signals:
+        print(f"  No {segment} signals to log.")
+        return
+    rows = build_signal_log_rows(portfolio, signals, segment, datetime.utcnow(), id_counters)
+    append_signal_log_rows(service, rows)
+    print(f"  Logged {len(rows)} {segment} signal(s) to Signal Log.")
+
 # ── Shared grounding instruction ──────────────────────────────────────────────
 
 GROUNDING_INSTRUCTION = (
@@ -816,6 +982,11 @@ def run_daily_digest():
     """Run the standard weekday flow: portfolio + active + monitoring + reassess."""
     print("Starting portfolio digest...")
 
+    # Shared across this run so a ticker flagged twice in one day still gets a
+    # unique Log ID (e.g. TICKER-20260806-1, TICKER-20260806-2).
+    signal_log_ids = {}
+    sheet_service = _sheet_service() if SIGNAL_LOG_ENABLED else None
+
     # Portfolio
     ticker_rows = get_tickers_from_sheet()
     if ticker_rows:
@@ -824,10 +995,15 @@ def run_daily_digest():
         print("Generating portfolio summary with Claude...")
         summary = generate_summary(portfolio)
         coverage_line = compute_coverage_summary(portfolio)
-        summary = f"{coverage_line}\n\n{summary}"
+        email_summary = f"{coverage_line}\n\n{summary}"
         print(f"  {coverage_line}")
         print("Sending portfolio email...")
-        send_email(summary)
+        send_email(email_summary)
+        if SIGNAL_LOG_ENABLED:
+            try:
+                log_signals_to_sheet(sheet_service, portfolio, summary, "Current Position", signal_log_ids)
+            except Exception as e:
+                print(f"  Warning: Signal Log write failed for Current Position: {e}")
     else:
         print("No portfolio tickers found, skipping.")
 
@@ -838,10 +1014,15 @@ def run_daily_digest():
         print("Generating active watchlist summary with Claude...")
         active_summary = generate_active_watchlist_summary(active_portfolio)
         coverage_line = compute_coverage_summary(active_portfolio)
-        active_summary = f"{coverage_line}\n\n{active_summary}"
+        email_active_summary = f"{coverage_line}\n\n{active_summary}"
         print(f"  {coverage_line}")
         print("Sending active watchlist email...")
-        send_active_watchlist_email(active_summary)
+        send_active_watchlist_email(email_active_summary)
+        if SIGNAL_LOG_ENABLED:
+            try:
+                log_signals_to_sheet(sheet_service, active_portfolio, active_summary, "Active", signal_log_ids)
+            except Exception as e:
+                print(f"  Warning: Signal Log write failed for Active Watchlist: {e}")
     else:
         print("No active watchlist tickers found, skipping.")
 
