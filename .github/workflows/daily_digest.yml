@@ -35,6 +35,7 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
           REASSESS_ENABLED: ${{ secrets.REASSESS_ENABLED }}
+          SIGNAL_LOG_ENABLED: ${{ secrets.SIGNAL_LOG_ENABLED }}
         run: python digest.py
 
   # ── Weekly catalyst scraper (existing) ──────────────────────────────────────
