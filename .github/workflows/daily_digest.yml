@@ -36,6 +36,9 @@ jobs:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
           REASSESS_ENABLED: ${{ secrets.REASSESS_ENABLED }}
           SIGNAL_LOG_ENABLED: ${{ secrets.SIGNAL_LOG_ENABLED }}
+          PORTFOLIO_ENABLED: ${{ secrets.PORTFOLIO_ENABLED }}
+          ACTIVE_WATCHLIST_ENABLED: ${{ secrets.ACTIVE_WATCHLIST_ENABLED }}
+          MONITORING_WATCHLIST_ENABLED: ${{ secrets.MONITORING_WATCHLIST_ENABLED }}
         run: python digest.py
 
   # ── Weekly catalyst scraper (existing) ──────────────────────────────────────
