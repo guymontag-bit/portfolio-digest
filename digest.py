@@ -28,8 +28,11 @@ MONITORING_WATCHLIST_TAB  = "2 Monitoring Watchlist"
 REASSESS_WATCHLIST_TAB    = "3 Reassess Watchlist"
 WATCHLIST_RANGE           = "A2:H200"
 
-REASSESS_ENABLED       = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
-LONG_POSITIONS_ENABLED = os.environ.get("LONG_POSITIONS_ENABLED", "true").lower() == "true"
+PORTFOLIO_ENABLED            = os.environ.get("PORTFOLIO_ENABLED", "true").lower() == "true"
+ACTIVE_WATCHLIST_ENABLED     = os.environ.get("ACTIVE_WATCHLIST_ENABLED", "true").lower() == "true"
+MONITORING_WATCHLIST_ENABLED = os.environ.get("MONITORING_WATCHLIST_ENABLED", "true").lower() == "true"
+REASSESS_ENABLED             = os.environ.get("REASSESS_ENABLED", "true").lower() == "true"
+LONG_POSITIONS_ENABLED       = os.environ.get("LONG_POSITIONS_ENABLED", "true").lower() == "true"
 
 # Signal Log — feedback-loop record of EXIT FLAG / ENTRY OPPORTUNITY / RISK FLAG
 # signals, scoped to Current Positions and Active Watchlist only (see columns A-O)
@@ -988,57 +991,55 @@ def run_daily_digest():
     sheet_service = _sheet_service() if SIGNAL_LOG_ENABLED else None
 
     # Portfolio
-    ticker_rows = get_tickers_from_sheet()
-    if ticker_rows:
-        total_value = compute_total_value(ticker_rows)
-        portfolio = build_portfolio_data(ticker_rows, total_value=total_value)
-        print("Generating portfolio summary with Claude...")
-        summary = generate_summary(portfolio)
-        coverage_line = compute_coverage_summary(portfolio)
-        email_summary = f"{coverage_line}\n\n{summary}"
-        print(f"  {coverage_line}")
-        print("Sending portfolio email...")
-        send_email(email_summary)
-        if SIGNAL_LOG_ENABLED:
-            try:
-                log_signals_to_sheet(sheet_service, portfolio, summary, "Current Position", signal_log_ids)
-            except Exception as e:
-                print(f"  Warning: Signal Log write failed for Current Position: {e}")
+    if PORTFOLIO_ENABLED:
+        ticker_rows = get_tickers_from_sheet()
+        if ticker_rows:
+            portfolio = build_portfolio_data(ticker_rows)
+            print("Generating portfolio summary with Claude...")
+            summary = generate_summary(portfolio)
+            coverage_line = compute_coverage_summary(portfolio)
+            summary = f"{coverage_line}\n\n{summary}"
+            print(f"  {coverage_line}")
+            print("Sending portfolio email...")
+            send_email(summary)
+        else:
+            print("No portfolio tickers found, skipping.")
     else:
-        print("No portfolio tickers found, skipping.")
+        print("Portfolio digest disabled via PORTFOLIO_ENABLED flag, skipping.")
 
     # Tier 1 — Active Watchlist
-    active_rows = get_active_watchlist_from_sheet()
-    if active_rows:
-        active_portfolio = build_portfolio_data(active_rows)
-        print("Generating active watchlist summary with Claude...")
-        active_summary = generate_active_watchlist_summary(active_portfolio)
-        coverage_line = compute_coverage_summary(active_portfolio)
-        email_active_summary = f"{coverage_line}\n\n{active_summary}"
-        print(f"  {coverage_line}")
-        print("Sending active watchlist email...")
-        send_active_watchlist_email(email_active_summary)
-        if SIGNAL_LOG_ENABLED:
-            try:
-                log_signals_to_sheet(sheet_service, active_portfolio, active_summary, "Active", signal_log_ids)
-            except Exception as e:
-                print(f"  Warning: Signal Log write failed for Active Watchlist: {e}")
+    if ACTIVE_WATCHLIST_ENABLED:
+        active_rows = get_active_watchlist_from_sheet()
+        if active_rows:
+            active_portfolio = build_portfolio_data(active_rows)
+            print("Generating active watchlist summary with Claude...")
+            active_summary = generate_active_watchlist_summary(active_portfolio)
+            coverage_line = compute_coverage_summary(active_portfolio)
+            active_summary = f"{coverage_line}\n\n{active_summary}"
+            print(f"  {coverage_line}")
+            print("Sending active watchlist email...")
+            send_active_watchlist_email(active_summary)
+        else:
+            print("No active watchlist tickers found, skipping.")
     else:
-        print("No active watchlist tickers found, skipping.")
+        print("Active watchlist digest disabled via ACTIVE_WATCHLIST_ENABLED flag, skipping.")
 
     # Tier 2 — Monitoring Watchlist
-    monitoring_rows = get_monitoring_watchlist_from_sheet()
-    if monitoring_rows:
-        monitoring_portfolio = build_portfolio_data(monitoring_rows)
-        print("Generating monitoring watchlist summary with Claude...")
-        monitoring_summary = generate_monitoring_watchlist_summary(monitoring_portfolio)
-        coverage_line = compute_coverage_summary(monitoring_portfolio)
-        monitoring_summary = f"{coverage_line}\n\n{monitoring_summary}"
-        print(f"  {coverage_line}")
-        print("Sending monitoring watchlist email...")
-        send_monitoring_watchlist_email(monitoring_summary)
+    if MONITORING_WATCHLIST_ENABLED:
+        monitoring_rows = get_monitoring_watchlist_from_sheet()
+        if monitoring_rows:
+            monitoring_portfolio = build_portfolio_data(monitoring_rows)
+            print("Generating monitoring watchlist summary with Claude...")
+            monitoring_summary = generate_monitoring_watchlist_summary(monitoring_portfolio)
+            coverage_line = compute_coverage_summary(monitoring_portfolio)
+            monitoring_summary = f"{coverage_line}\n\n{monitoring_summary}"
+            print(f"  {coverage_line}")
+            print("Sending monitoring watchlist email...")
+            send_monitoring_watchlist_email(monitoring_summary)
+        else:
+            print("No monitoring watchlist tickers found, skipping.")
     else:
-        print("No monitoring watchlist tickers found, skipping.")
+        print("Monitoring watchlist digest disabled via MONITORING_WATCHLIST_ENABLED flag, skipping.")
 
     # Tier 3 — Reassess Watchlist
     if REASSESS_ENABLED:
