@@ -746,6 +746,15 @@ GROUNDING_INSTRUCTION = (
     "basis for a holding where this line is absent."
 )
 
+OUTPUT_FORMAT_INSTRUCTION = (
+    "FORMATTING: This response will be sent as a plain-text email and rendered "
+    "exactly as written — it is NOT parsed as Markdown. Do not use Markdown "
+    "syntax of any kind: no ## or # headers, no ** for bold, no _ for italics, "
+    "no [text](link) formatting. For section headers, use ALL CAPS on their own "
+    "line. For lists, use a plain hyphen (-) followed by a space. Keep formatting "
+    "simple and readable as raw text."
+)
+
 # ── Claude Summary (Portfolio) ────────────────────────────────────────────────
 
 def generate_summary(portfolio, failure_patterns_block=""):
@@ -759,6 +768,7 @@ def generate_summary(portfolio, failure_patterns_block=""):
 Today is {today_str}. Below is the portfolio data including yesterday's price action, recent news, any SEC EDGAR 8-K filings from the past 48 hours, and position data (share count, entry price, unrealized gain/loss, and % of total portfolio) for each holding.
 
 {GROUNDING_INSTRUCTION}
+{OUTPUT_FORMAT_INSTRUCTION}
 {failure_patterns_block}
 
 {data_block}
@@ -810,6 +820,7 @@ def generate_active_watchlist_summary(portfolio, failure_patterns_block=""):
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
 
 {GROUNDING_INSTRUCTION}
+{OUTPUT_FORMAT_INSTRUCTION}
 {failure_patterns_block}
 
 {data_block}
@@ -854,6 +865,7 @@ def generate_monitoring_watchlist_summary(portfolio, failure_patterns_block=""):
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
 
 {GROUNDING_INSTRUCTION}
+{OUTPUT_FORMAT_INSTRUCTION}
 {failure_patterns_block}
 
 {data_block}
@@ -897,6 +909,7 @@ def generate_reassess_watchlist_summary(portfolio, failure_patterns_block=""):
 Today is {today_str}. Below is data including yesterday's price action, recent news, and any SEC EDGAR 8-K filings from the past 48 hours for each ticker.
 
 {GROUNDING_INSTRUCTION}
+{OUTPUT_FORMAT_INSTRUCTION}
 {failure_patterns_block}
 
 {data_block}
@@ -942,6 +955,7 @@ def generate_long_positions_summary(portfolio, failure_patterns_block=""):
 Today is {today_str}. Below is data including yesterday's price action, recent news, any SEC EDGAR 8-K filings from the past 48 hours, and position data (share count, entry price, unrealized gain/loss, and % of total long-term portfolio) for each holding.
 
 {GROUNDING_INSTRUCTION}
+{OUTPUT_FORMAT_INSTRUCTION}
 {failure_patterns_block}
 
 CRITICAL FRAMING: Evaluate everything through a multi-month time horizon. Daily price movement, single-session volume spikes, and short-term volatility are NOT relevant to this briefing and should not be treated as action signals — mention price action only briefly for context, not as a headline concern. Do not suggest exiting a position due to a single bad day or a temporary dip. Instead, focus on developments that would change the long-term investment thesis:
