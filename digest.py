@@ -1058,8 +1058,13 @@ def run_daily_digest():
             coverage_line = compute_coverage_summary(portfolio)
             summary = f"{coverage_line}\n\n{summary}"
             print(f"  {coverage_line}")
-            print("Sending portfolio email...")
+                        print("Sending portfolio email...")
             send_email(summary)
+            if SIGNAL_LOG_ENABLED:
+                try:
+                    log_signals_to_sheet(sheet_service, portfolio, summary, "Current Position", signal_log_ids)
+                except Exception as e:
+                    print(f"  Warning: Signal Log write failed for Current Position: {e}")
         else:
             print("No portfolio tickers found, skipping.")
     else:
@@ -1077,6 +1082,11 @@ def run_daily_digest():
             print(f"  {coverage_line}")
             print("Sending active watchlist email...")
             send_active_watchlist_email(active_summary)
+            if SIGNAL_LOG_ENABLED:
+                try:
+                    log_signals_to_sheet(sheet_service, active_portfolio, active_summary, "Active", signal_log_ids)
+                except Exception as e:
+                    print(f"  Warning: Signal Log write failed for Active: {e}")
         else:
             print("No active watchlist tickers found, skipping.")
     else:
@@ -1125,7 +1135,8 @@ def run_long_positions_digest():
     if not LONG_POSITIONS_ENABLED:
         print("Long positions digest disabled via LONG_POSITIONS_ENABLED flag, skipping.")
         return
-
+        
+    failure_patterns_block = build_failure_patterns_block()
     long_rows = get_long_positions_from_sheet()
     if long_rows:
         total_value = compute_total_value(long_rows)
