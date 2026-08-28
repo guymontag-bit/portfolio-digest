@@ -1058,7 +1058,7 @@ def run_daily_digest():
             coverage_line = compute_coverage_summary(portfolio)
             summary = f"{coverage_line}\n\n{summary}"
             print(f"  {coverage_line}")
-                        print("Sending portfolio email...")
+            print("Sending portfolio email...")
             send_email(summary)
             if SIGNAL_LOG_ENABLED:
                 try:
