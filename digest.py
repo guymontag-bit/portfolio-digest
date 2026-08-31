@@ -746,6 +746,11 @@ GROUNDING_INSTRUCTION = (
     "basis for a holding where this line is absent."
 )
 
+# Portfolio concentration threshold, shared across Portfolio and Long Positions
+# prompts so "large %" / "outsized" mean the same thing in both emails and
+# don't drift apart from separate edits over time.
+CONCENTRATION_THRESHOLD_PCT = 20
+
 OUTPUT_FORMAT_INSTRUCTION = (
     "FORMATTING: This response will be sent as a plain-text email and rendered "
     "exactly as written — it is NOT parsed as Markdown. Do not use Markdown "
@@ -775,7 +780,7 @@ Today is {today_str}. Below is the portfolio data including yesterday's price ac
 
 POSITION-AWARE ANALYSIS: When evaluating exit signals, explicitly weigh position context, not just price/news signals in isolation:
 - A decline on a position already at an unrealized loss is more urgent than the same decline on a position with a cushion of unrealized gains
-- A decline on a holding that represents a large % of total portfolio value deserves more attention than the same decline on a small position
+- A decline on a holding that represents more than {CONCENTRATION_THRESHOLD_PCT}% of total portfolio value deserves more attention than the same decline on a smaller position
 - Where position data is available, reference it directly (e.g. "this position is already down X% from entry" or "this is Y% of the total portfolio, the largest/one of the larger holdings")
 - Where position data is missing for a holding, do not assume a size or cost basis — just proceed with signal-based analysis for that ticker
 
@@ -968,7 +973,7 @@ CRITICAL FRAMING: Evaluate everything through a multi-month time horizon. Daily 
 
 POSITION-AWARE ANALYSIS: Where position data is available, incorporate it into the thesis-level view — not as a trading signal, but as long-term risk context:
 - Note unrealized gain/loss as an indicator of how the position has performed against the original long-term thesis, not as a reason to act on short-term movement
-- Note % of total long-term portfolio to flag concentration risk if one holding has grown to dominate the long-term core
+- Flag concentration risk explicitly if any single holding exceeds {CONCENTRATION_THRESHOLD_PCT}% of total long-term portfolio value
 - Where position data is missing for a holding, do not assume a size or cost basis — proceed with thesis-level analysis for that ticker regardless
 
 Write a focused long-term holdings briefing structured as follows:
@@ -981,7 +986,7 @@ Write a focused long-term holdings briefing structured as follows:
    - Any fundamental or strategic news and what it means for the long-term thesis
    - One-line bottom line: thesis intact, thesis strengthening, or thesis warrants review
 
-3. CONCENTRATION CHECK — Briefly note if any single holding now represents an outsized share of the long-term portfolio, based on the position data provided.
+3. CONCENTRATION CHECK — Flag any single holding that exceeds {CONCENTRATION_THRESHOLD_PCT}% of the long-term portfolio as a concentration risk, based on the position data provided.
 
 4. THINGS TO MONITOR — 3-5 items relevant to the long-term thesis of these holdings that may develop over the coming weeks to months (e.g. upcoming earnings, expected data readouts, sector trends). This is not a daily action list.
 
