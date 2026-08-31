@@ -631,7 +631,7 @@ Briefing:
     try:
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=800,
+            max_tokens=1200,
             messages=[{"role": "user", "content": prompt}]
         )
         raw = response.content[0].text.strip()
@@ -803,7 +803,7 @@ Be direct and actionable. Skip generic market commentary. If there is no news or
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=3000,
+        max_tokens=5000,
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text
@@ -848,7 +848,7 @@ Be direct and actionable. Focus entirely on company-specific developments. The i
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=3000,
+        max_tokens=5000,
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text
