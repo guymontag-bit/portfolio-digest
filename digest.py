@@ -28,6 +28,8 @@ MONITORING_WATCHLIST_TAB  = "2 Monitoring Watchlist"
 REASSESS_WATCHLIST_TAB    = "3 Reassess Watchlist"
 FAILURE_PATTERNS_TAB      = "Failure Patterns"
 FAILURE_PATTERNS_RANGE    = "A2:C50"
+TRADE_JOURNAL_TAB         = "Trade Journal"
+TRADE_JOURNAL_RANGE       = "A2:D500"
 WATCHLIST_RANGE           = "A2:H200"
 
 PORTFOLIO_ENABLED            = os.environ.get("PORTFOLIO_ENABLED", "true").lower() == "true"
@@ -41,6 +43,10 @@ LONG_POSITIONS_ENABLED       = os.environ.get("LONG_POSITIONS_ENABLED", "true").
 SIGNAL_LOG_TAB     = "Signal Log"
 SIGNAL_LOG_RANGE   = "A:O"
 SIGNAL_LOG_ENABLED = os.environ.get("SIGNAL_LOG_ENABLED", "true").lower() == "true"
+
+# Trade Journal — ticker-specific history injected into build_data_block, one
+# most-recent entry per ticker (see build_trade_journal_index)
+TRADE_JOURNAL_ENABLED = os.environ.get("TRADE_JOURNAL_ENABLED", "true").lower() == "true"
 
 RECIPIENT_EMAIL   = os.environ["RECIPIENT_EMAIL"]
 SENDER_EMAIL       = os.environ["SENDER_EMAIL"]
@@ -236,6 +242,51 @@ def build_failure_patterns_block():
         if p["trigger"]:
             block += f" (Watch for: {p['trigger']})"
     return block
+
+def get_trade_journal_entries():
+    """Read raw Trade Journal rows: Ticker | Date | Outcome | Lesson."""
+    service = _sheet_service()
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SPREADSHEET_ID,
+        range=f"{TRADE_JOURNAL_TAB}!{TRADE_JOURNAL_RANGE}"
+    ).execute()
+    values = result.get("values", [])
+
+    entries = []
+    for row in values:
+        if not row or not row[0].strip():
+            continue
+        entries.append({
+            "ticker":  row[0].strip().upper(),
+            "date":    row[1].strip() if len(row) > 1 and row[1] else "",
+            "outcome": row[2].strip() if len(row) > 2 and row[2] else "",
+            "lesson":  row[3].strip() if len(row) > 3 and row[3] else "",
+        })
+
+    print(f"Found {len(entries)} trade journal entries")
+    return entries
+
+def build_trade_journal_index():
+    """
+    Build a ticker -> most recent entry lookup from the Trade Journal tab.
+    Assumes rows are entered in roughly chronological order (same convention
+    as the append-only Signal Log) — for a given ticker, the last matching row
+    read wins. If the journal isn't in date order, sort the sheet by Date
+    before running the digest.
+    """
+    if not TRADE_JOURNAL_ENABLED:
+        return {}
+    try:
+        entries = get_trade_journal_entries()
+    except Exception as e:
+        print(f"Warning: could not read Trade Journal, skipping: {e}")
+        return {}
+
+    index = {}
+    for entry in entries:
+        if entry["ticker"]:
+            index[entry["ticker"]] = entry  # last one read wins — most recent
+    return index
 
 def get_long_positions_from_sheet():
     """Read unique long-position tickers, price fallback data, and position data
@@ -450,8 +501,9 @@ def build_portfolio_data(ticker_rows, total_value=None):
 
 # ── Data Block Builder ────────────────────────────────────────────────────────
 
-def build_data_block(portfolio):
+def build_data_block(portfolio, trade_journal_index=None):
     """Build a readable text block from portfolio data for Claude prompts."""
+    trade_journal_index = trade_journal_index or {}
     data_block = ""
     for holding in portfolio:
         ticker   = holding["ticker"]
@@ -506,10 +558,17 @@ def build_data_block(portfolio):
                 pos_parts.append(f"{sign}{position['unrealized_pct']}% unrealized")
             if position.get("pct_of_portfolio") is not None:
                 pos_parts.append(f"{position['pct_of_portfolio']}% of portfolio")
-            if pos_parts:
+         if pos_parts:
                 data_block += "Position: " + " | ".join(pos_parts) + "\n"
             else:
                 data_block += "Position: held, but size/cost-basis data unavailable\n"
+
+        journal_entry = trade_journal_index.get(ticker)
+        if journal_entry:
+            line = f"Most recent past trade: {journal_entry['date'] or 'date unknown'} — {journal_entry['outcome'] or 'outcome not recorded'}"
+            if journal_entry["lesson"]:
+                line += f" — {journal_entry['lesson']}"
+            data_block += line + "\n"
 
         if news:
             data_block += "Recent news:\n"
@@ -739,11 +798,16 @@ GROUNDING_INSTRUCTION = (
     "freshness indicator for that quote rather than assuming it is as current "
     "as an API-sourced quote. If a quote has missing fields noted, do not "
     "speculate about the missing values.\n\n"
-    "Where a 'Position:' line is present, this is factual position data from "
+      "Where a 'Position:' line is present, this is factual position data from "
     "the investor's own records: share count, entry price, unrealized gain/loss "
     "%, and % of total portfolio value. Treat this as ground truth and weigh it "
     "directly in your analysis — do not estimate or infer position size or cost "
-    "basis for a holding where this line is absent."
+    "basis for a holding where this line is absent.\n\n"
+    "Where a 'Most recent past trade:' line is present, this is factual history "
+    "from the investor's own trade journal for that exact ticker. Present it as "
+    "neutral context alongside today's data — state what the outcome and lesson "
+    "were, but do not speculate beyond what's written, and do not treat it as an "
+    "implicit instruction to act a certain way today."
 )
 
 # Portfolio concentration threshold, shared across Portfolio and Long Positions
@@ -762,10 +826,10 @@ OUTPUT_FORMAT_INSTRUCTION = (
 
 # ── Claude Summary (Portfolio) ────────────────────────────────────────────────
 
-def generate_summary(portfolio, failure_patterns_block=""):
+def generate_summary(portfolio, failure_patterns_block="", trade_journal_index=None):
     """Generate exit-focused portfolio digest via Claude, weighing cost basis and position size."""
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
-    data_block = build_data_block(portfolio)
+    data_block = build_data_block(portfolio, trade_journal_index)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
 
     prompt = f"""You are a trading assistant helping a retail investor manage a small hobby portfolio of micro-cap and speculative stocks. The investor's strategy is short holding periods with small positions, looking to exit as quickly as possible when negative signals appear.
@@ -815,9 +879,9 @@ Be direct and actionable. Skip generic market commentary. If there is no news or
 
 # ── Claude Summary (Active Watchlist) ────────────────────────────────────────
 
-def generate_active_watchlist_summary(portfolio, failure_patterns_block=""):
+def generate_active_watchlist_summary(portfolio, failure_patterns_block="", trade_journal_index=None):
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
-    data_block = build_data_block(portfolio)
+    data_block = build_data_block(portfolio, trade_journal_index)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
 
     prompt = f"""You are a trading assistant helping a retail investor monitor their active watchlist of speculative micro-cap stocks. These are the investor's highest-conviction watchlist names — tickers they are actively considering entering in the near term. The investor takes small positions and looks for short-term catalysts.
@@ -860,9 +924,9 @@ Be direct and actionable. Focus entirely on company-specific developments. The i
 
 # ── Claude Summary (Monitoring Watchlist) ────────────────────────────────────
 
-def generate_monitoring_watchlist_summary(portfolio, failure_patterns_block=""):
+def generate_monitoring_watchlist_summary(portfolio, failure_patterns_block="", trade_journal_index=None):
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
-    data_block = build_data_block(portfolio)
+    data_block = build_data_block(portfolio, trade_journal_index)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
 
     prompt = f"""You are a trading assistant helping a retail investor monitor their secondary watchlist of speculative micro-cap stocks. These tickers are being watched for developing signals — they are not yet ready for entry but could be elevated to the active watchlist if the right catalyst appears.
@@ -904,9 +968,9 @@ Be concise and signal-focused. The investor wants to know: has anything here ear
 
 # ── Claude Summary (Reassess Watchlist) ──────────────────────────────────────
 
-def generate_reassess_watchlist_summary(portfolio, failure_patterns_block=""):
+def generate_reassess_watchlist_summary(portfolio, failure_patterns_block="", trade_journal_index=None):
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
-    data_block = build_data_block(portfolio)
+    data_block = build_data_block(portfolio, trade_journal_index)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
 
     prompt = f"""You are a trading assistant helping a retail investor review their reassess watchlist — a list of speculative micro-cap stocks that have been flagged for reconsideration. These tickers have either underperformed expectations, lost a catalyst, or simply haven't moved. The investor needs to decide whether to keep watching, move them up, or drop them entirely.
@@ -949,10 +1013,10 @@ Be direct and unsentimental. The purpose of this list is to cut underperformers 
 
 # ── Claude Summary (Long Positions) ──────────────────────────────────────────
 
-def generate_long_positions_summary(portfolio, failure_patterns_block=""):
+def generate_long_positions_summary(portfolio, failure_patterns_block="", trade_journal_index=None):
     """Generate a thesis-level digest for long-term core holdings via Claude, weighing cost basis and position size."""
     client     = Anthropic(api_key=ANTHROPIC_API_KEY)
-    data_block = build_data_block(portfolio)
+    data_block = build_data_block(portfolio, trade_journal_index)
     today_str  = datetime.utcnow().strftime("%A, %B %d, %Y")
 
     prompt = f"""You are a trading assistant helping a retail investor manage a small core of long-term positions held for stability alongside a much more active, short-term speculative portfolio. These are NOT short-term trades. The investor's intended holding period for these names is months, potentially many months to years, not days or weeks.
@@ -1053,13 +1117,16 @@ def run_daily_digest():
     signal_log_ids = {}
     sheet_service = _sheet_service() if SIGNAL_LOG_ENABLED else None
 
+    # Built once per run — same read-once-then-lookup pattern as failure patterns
+    trade_journal_index = build_trade_journal_index()
+
     # Portfolio
     if PORTFOLIO_ENABLED:
         ticker_rows = get_tickers_from_sheet()
         if ticker_rows:
             portfolio = build_portfolio_data(ticker_rows)
             print("Generating portfolio summary with Claude...")
-            summary = generate_summary(portfolio, failure_patterns_block)
+            summary = generate_summary(portfolio, failure_patterns_block, trade_journal_index)
             coverage_line = compute_coverage_summary(portfolio)
             summary = f"{coverage_line}\n\n{summary}"
             print(f"  {coverage_line}")
@@ -1081,7 +1148,7 @@ def run_daily_digest():
         if active_rows:
             active_portfolio = build_portfolio_data(active_rows)
             print("Generating active watchlist summary with Claude...")
-            active_summary = generate_active_watchlist_summary(active_portfolio, failure_patterns_block)
+            active_summary = generate_active_watchlist_summary(active_portfolio, failure_patterns_block, trade_journal_index)
             coverage_line = compute_coverage_summary(active_portfolio)
             active_summary = f"{coverage_line}\n\n{active_summary}"
             print(f"  {coverage_line}")
@@ -1103,7 +1170,7 @@ def run_daily_digest():
         if monitoring_rows:
             monitoring_portfolio = build_portfolio_data(monitoring_rows)
             print("Generating monitoring watchlist summary with Claude...")
-            monitoring_summary = generate_monitoring_watchlist_summary(monitoring_portfolio, failure_patterns_block)
+            monitoring_summary = generate_monitoring_watchlist_summary(monitoring_portfolio, failure_patterns_block, trade_journal_index)
             coverage_line = compute_coverage_summary(monitoring_portfolio)
             monitoring_summary = f"{coverage_line}\n\n{monitoring_summary}"
             print(f"  {coverage_line}")
@@ -1120,7 +1187,7 @@ def run_daily_digest():
         if reassess_rows:
             reassess_portfolio = build_portfolio_data(reassess_rows)
             print("Generating reassess watchlist summary with Claude...")
-            reassess_summary = generate_reassess_watchlist_summary(reassess_portfolio)
+            reassess_summary = generate_reassess_watchlist_summary(reassess_portfolio, failure_patterns_block, trade_journal_index)
             coverage_line = compute_coverage_summary(reassess_portfolio)
             reassess_summary = f"{coverage_line}\n\n{reassess_summary}"
             print(f"  {coverage_line}")
@@ -1142,12 +1209,13 @@ def run_long_positions_digest():
         return
         
     failure_patterns_block = build_failure_patterns_block()
+    trade_journal_index    = build_trade_journal_index()
     long_rows = get_long_positions_from_sheet()
     if long_rows:
         total_value = compute_total_value(long_rows)
         long_portfolio = build_portfolio_data(long_rows, total_value=total_value)
         print("Generating long positions summary with Claude...")
-        long_summary = generate_long_positions_summary(long_portfolio, failure_patterns_block)
+        long_summary = generate_long_positions_summary(long_portfolio, failure_patterns_block, trade_journal_index)
         coverage_line = compute_coverage_summary(long_portfolio)
         long_summary = f"{coverage_line}\n\n{long_summary}"
         print(f"  {coverage_line}")
