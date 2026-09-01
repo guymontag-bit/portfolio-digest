@@ -558,7 +558,7 @@ def build_data_block(portfolio, trade_journal_index=None):
                 pos_parts.append(f"{sign}{position['unrealized_pct']}% unrealized")
             if position.get("pct_of_portfolio") is not None:
                 pos_parts.append(f"{position['pct_of_portfolio']}% of portfolio")
-         if pos_parts:
+            if pos_parts:
                 data_block += "Position: " + " | ".join(pos_parts) + "\n"
             else:
                 data_block += "Position: held, but size/cost-basis data unavailable\n"
