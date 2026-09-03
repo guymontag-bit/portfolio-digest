@@ -2,11 +2,11 @@ name: Portfolio Digest & Catalyst Scraper
 
 on:
   schedule:
-    # Daily digest — weekdays at 5am ET (10:00 UTC)
+    # Daily digest — weekdays at 5am ET (9:00 UTC)
     - cron: '0 10 * * 1-5'
-    # Weekly catalyst scraper — Tuesdays at 5:05am ET (10:05 UTC)
+    # Weekly catalyst scraper — Tuesdays at 5:05am ET (9:05 UTC)
     - cron: '5 10 * * 2'
-    # Long positions digest — Mon/Wed/Fri at 5:10am ET (10:10 UTC)
+    # Long positions digest — Mon/Wed/Fri at 5:10am ET (9:10 UTC)
     - cron: '10 10 * * 1,3,5'
   workflow_dispatch:  # allows manual trigger from GitHub Actions UI
 
