@@ -29,7 +29,7 @@ REASSESS_WATCHLIST_TAB    = "3 Reassess Watchlist"
 FAILURE_PATTERNS_TAB      = "Failure Patterns"
 FAILURE_PATTERNS_RANGE    = "A2:C50"
 TRADE_JOURNAL_TAB         = "Trade Journal"
-TRADE_JOURNAL_RANGE       = "A2:D500"
+TRADE_JOURNAL_RANGE       = "A2:H500"
 WATCHLIST_RANGE           = "A2:H200"
 
 PORTFOLIO_ENABLED            = os.environ.get("PORTFOLIO_ENABLED", "true").lower() == "true"
@@ -244,7 +244,7 @@ def build_failure_patterns_block():
     return block
 
 def get_trade_journal_entries():
-    """Read raw Trade Journal rows: Ticker | Date | Outcome | Lesson."""
+    """Read raw Trade Journal rows: Ticker (A) | Trade Dates (B) | P&L % (E) | Outcome (G)."""
     service = _sheet_service()
     result = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
@@ -259,8 +259,8 @@ def get_trade_journal_entries():
         entries.append({
             "ticker":  row[0].strip().upper(),
             "date":    row[1].strip() if len(row) > 1 and row[1] else "",
-            "outcome": row[2].strip() if len(row) > 2 and row[2] else "",
-            "lesson":  row[3].strip() if len(row) > 3 and row[3] else "",
+            "pnl_pct": row[4].strip() if len(row) > 4 and row[4] else "",
+            "outcome": row[6].strip() if len(row) > 6 and row[6] else "",
         })
 
     print(f"Found {len(entries)} trade journal entries")
@@ -565,9 +565,10 @@ def build_data_block(portfolio, trade_journal_index=None):
 
         journal_entry = trade_journal_index.get(ticker)
         if journal_entry:
-            line = f"Most recent past trade: {journal_entry['date'] or 'date unknown'} — {journal_entry['outcome'] or 'outcome not recorded'}"
-            if journal_entry["lesson"]:
-                line += f" — {journal_entry['lesson']}"
+            line = f"Most recent past trade: {journal_entry['date'] or 'date unknown'}"
+            if journal_entry["pnl_pct"]:
+                line += f" — {journal_entry['pnl_pct']} P&L"
+            line += f" — {journal_entry['outcome'] or 'outcome not recorded'}"
             data_block += line + "\n"
 
         if news:
