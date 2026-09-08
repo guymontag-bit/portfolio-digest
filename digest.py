@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import time
 import requests
 import xml.etree.ElementTree as ET
@@ -256,8 +257,13 @@ def get_trade_journal_entries():
     for row in values:
         if not row or not row[0].strip():
             continue
+        # Strip trailing labels like "(win)", "(loss)", "(batch 1)" used in the
+        # sheet to distinguish multiple logged trades for the same ticker — the
+        # index key needs to match the plain ticker used everywhere else in the
+        # pipeline (e.g. "SMRT (win)" / "SMRT (loss)" both need to key as "SMRT").
+        clean_ticker = re.sub(r"\s*\(.*?\)\s*$", "", row[0].strip()).upper()
         entries.append({
-            "ticker":  row[0].strip().upper(),
+            "ticker":  clean_ticker,
             "date":    row[1].strip() if len(row) > 1 and row[1] else "",
             "pnl_pct": row[4].strip() if len(row) > 4 and row[4] else "",
             "outcome": row[6].strip() if len(row) > 6 and row[6] else "",
